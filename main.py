@@ -271,7 +271,7 @@ async def show_account(update_or_query, context: ContextTypes.DEFAULT_TYPE):
 # Support Info
 async def show_help(update_or_query, context: ContextTypes.DEFAULT_TYPE):
     msg = update_or_query.message if hasattr(update_or_query, 'message') else update_or_query
-    await msg.reply_text("❓ For support, contact @CryptoFatherSupport")
+    await msg.reply_text("❓ For support, contact @Unclesbotsupport")
 
 # /start command
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
