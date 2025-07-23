@@ -505,6 +505,8 @@ async def handle_admin_verification(update: Update, context: ContextTypes.DEFAUL
                             notes=f"Approved by @{query.from_user.username}"
                     )
 
+                    withdrawal_tracker.record_withdrawal(user_id)
+
                         # Notify admin
                     await query.edit_message_text(
                             f"✅ Approved withdrawal of {amount} USDT\n"
@@ -752,7 +754,7 @@ async def withdraw_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return WITHDRAW_AMOUNT
 
     # Record the withdrawal attempt
-        withdrawal_tracker.record_withdrawal(user_id)         
+                 
         net_amount = round(amount * 0.90, 2)
         context.user_data['withdraw_amount'] = amount
         context.user_data['withdraw_net_amount'] = net_amount

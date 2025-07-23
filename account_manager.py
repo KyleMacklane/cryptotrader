@@ -2,6 +2,7 @@ import csv
 import os
 import logging
 from datetime import datetime
+from pathlib import Path
 from filelock import FileLock  
 from trade_reconciler import TransactionLogger
 tx_logger = TransactionLogger()
@@ -9,16 +10,13 @@ from mt5.mt5service import MT5Service
 import json
 from mt5.EACommunicator_API import EACommunicator_API
 
-MT5_CREDENTIALS = {
-    'login':  210708328,
-    'server': "Exness-MT5Trial9",
-    'password': "Unclehard2025@"
-}
 
 
 logger = logging.getLogger(__name__)
 class AccountManager:
-    def __init__(self, csv_file="/data/accounts.csv"):
+    def __init__(self, csv_file="accounts.csv"):
+        self.data_dir = Path("data")
+        self.data_dir.mkdir(exist_ok=True)
         self.csv_file = csv_file
         self.lock = FileLock(f"{csv_file}.lock")
         self.fieldnames = [
@@ -202,7 +200,7 @@ class AccountManager:
         balance = float(account.get('balance', 0))
         return balance + self.get_floating_pl()
     
-    
+
     
     def process_deposit(self, telegram_id: str, amount: float) -> bool:
         """Handle new deposits"""
