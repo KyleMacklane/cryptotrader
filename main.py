@@ -211,7 +211,6 @@ async def show_account(update_or_query, context: ContextTypes.DEFAULT_TYPE):
     total_deposits = account_info.get('total_deposits', '0.00')
     floating_pl = account_manager.get_floating_pl()
     closed_pl = account_manager.get_closed_pl()
-    equity = account_manager.get_current_equity(user_id)
     # Format response
     response = (
         "📊 *Account Information*\n\n"
@@ -234,19 +233,19 @@ async def show_account(update_or_query, context: ContextTypes.DEFAULT_TYPE):
        # Connect to MT4 and get live balance   
     mt4 =  EACommunicator_API
 
-    def get_mt4_equity():
+    def get_mt4_balance():
         """Gets current account equity (balance + floating P/L)"""
         mt4 = EACommunicator_API()
         try:
             mt4.Connect()
-            return mt4.Get_current_equity()  # Uses your existing method
+            return mt4.Get_account_balance()  
         except Exception as e:
             logger.error(f"MT4 equity check failed: {str(e)}")
             raise
         finally:
             mt4.Disconnect()    
     try:
-        mt4_balance = get_mt4_equity()
+        mt4_balance = get_mt4_balance
         response += f"\n🔹 COLLECTIVE POOL: *{mt4_balance:.2f} USD*"
     except Exception as e:
         logger.error(f"Failed to get MT4 balance: {e}")
@@ -280,18 +279,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         """*WELCOME TO UNCLE HARD SCALPING BOT, PLEASE READ CAREFULLY BEFORE INVESTING*.
 
-   INVESTING INVOLVES RISKS, DON'T INVEST BORROWED OR EMERGENCY FUNDS !!
-*How It Works:*
-a) 1 to 2 % daily earnings SOMETIMES few losses (real tradinG).
-b) 10% on deposits.
-c) 10 % + gas fee on withdrawals .
-d) minimum deposits  100 $and withdrawals are 50$.
-e) Deposits are locked to avoid account liqudations and unlocked on return on investment. 
-f) Only  1 withdrawal is allowed per month. 
-g) withdrawals are processed within 24hrs, no delays.
+        INVESTING INVOLVES RISKS, DON'T INVEST BORROWED OR EMERGENCY FUNDS !!
+        *How It Works:*
+        a) 1 to 2 % daily earnings SOMETIMES few losses (real tradinG).
+        b) 10% on deposits.
+        c) 10 % + gas fee on withdrawals .
+        d) minimum deposits  100 $and withdrawals are 50$.
+        e) Deposits are locked to avoid account liqudations and unlocked on return on investment. 
+        f) Only  1 withdrawal is allowed per month. 
+        g) withdrawals are processed within 24hrs, no delays.
 
 
- By continuing you agree to the above terms, welcome aboard.""",
+        By continuing you agree to the above terms, welcome aboard.""",
         parse_mode='Markdown',
         reply_markup=main_menu_keyboard()
     )
@@ -326,12 +325,13 @@ async def notify_admin_deposit(user_id: int, amount: float, context: ContextType
         gross_amount = context.user_data.get('gross_deposit', amount)
         formatted_amount = f"{float(gross_amount):.2f}"
         tx_hash = context.user_data.get("tx_", "N/A")
+      
         
         with open("pending_deposits.csv", "a") as f:
-            f.write(f"{user_id},{gross_amount},{tx_hash},{datetime.now()}\n")
+            f.write(f"{user_id},{user.username},{gross_amount},{tx_hash},{datetime.now()}\n")
 
         keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("✅ Verify Deposit", callback_data=f"verify_deposit_{user_id}_{formatted_amount}")],
+            [InlineKeyboardButton("✅ Verify Deposit", callback_data=f"verify_deposit_{user_id}_{user.username}_{formatted_amount}")],
             [InlineKeyboardButton("❌ Reject Deposit", callback_data=f"reject_deposit_{user_id}_{formatted_amount}")]
         ])
         
@@ -403,11 +403,14 @@ async def handle_admin_verification(update: Update, context: ContextTypes.DEFAUL
         user_id = int(parts[2])
         amount = float(parts[3])
         tx_id = str(parts[4]) if len(parts) > 4 else "UNKNOWN"
+        user = await context.bot.get_chat(user_id)
 
         logger.info(f"Processing {action} for {request_type} of {amount} by user {user_id}")
 
         if request_type == "deposit":
             if action == "verify":
+                
+
 
                 try:
                     gross_amount = amount
@@ -427,7 +430,7 @@ async def handle_admin_verification(update: Update, context: ContextTypes.DEFAUL
 
                     # Notify admin
                     await query.edit_message_caption(
-                        caption=f"✅ Verified deposit of {gross_amount} USDT (credited {net_amount:.2f} after fee)",
+                        caption=f"✅ Verified deposit of {gross_amount} USDT (credited {net_amount:.2f} after fee) for user{user.username if user.username else user.full_name} ",
                         reply_markup=InlineKeyboardMarkup([])  
                         )
                     # Notify user
@@ -509,7 +512,7 @@ async def handle_admin_verification(update: Update, context: ContextTypes.DEFAUL
 
                         # Notify admin
                     await query.edit_message_text(
-                            f"✅ Approved withdrawal of {amount} USDT\n"
+                            f"✅ Approved withdrawal of {amount} USDT for user @{user.username if user.username else user.full_name}\n"
                             f"to address: {address}"
                     )
 
@@ -814,11 +817,15 @@ async def calculate_and_distribute_profits(context: ContextTypes.DEFAULT_TYPE = 
         # Get already processed trades
         processed_trades = account_manager.get_processed_trades()
         
-        # Filter out deposits and already processed trades
+        # Filter out deposits plus withdraws and already processed trades
         valid_trades = closed_positions[
-            ~((closed_positions['symbol'].isna()) & (closed_positions['profit'] > 0)) &
-            (~closed_positions['ticket'].isin(processed_trades))
+            (closed_positions['symbol'].notna()) &
+            (closed_positions['type'].isin(['buy', 'sell'])) &  # Only buy/sell trades
+            (~closed_positions['ticket'].isin(processed_trades)) &
+            (~closed_positions['comment'].str.contains("deposit|withdraw|balance|adjust|transfer|funding", case=False, na=False))
         ]
+
+
         
         if valid_trades.empty:
             logger.info("No new valid trades to process")
