@@ -55,6 +55,7 @@ BOT_USERNAME: Final = os.getenv('BOT_USERNAME')
 COMMUNITY_LINK = "https://t.me/Unclesbotsupport"
 ADMIN_IDS = [5079683472,5823817060]  
 DEPOSIT_AMOUNT, WITHDRAW_AMOUNT, WITHDRAW_ADDRESS, TXN_PROOF = range(4)
+EDIT_USER_BALANCE = range(1)
 REFERRAL_BONUS_PERCENT=10
 PROFIT_FEE_RATE = 0.10 
 MAX_WITHDRAWALS_PER_MONTH = 1
@@ -123,9 +124,10 @@ async def admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📊 View All Balances", callback_data="admin_view_balances")],
-        [InlineKeyboardButton("🔄 Process Withdrawals", callback_data="admin_process_withdrawals")],
-        [InlineKeyboardButton("📋 Pending Deposits", callback_data="admin_pending_deposits")]
+        # [InlineKeyboardButton("📊 View All Balances", callback_data="admin_view_balances")],
+        [InlineKeyboardButton("✏️ View User Balance", callback_data="admin_edit_balance")],
+        # [InlineKeyboardButton("🔄 Process Withdrawals", callback_data="admin_process_withdrawals")],
+        # [InlineKeyboardButton("📋 Pending Deposits", callback_data="admin_pending_deposits")]
     ])
     await update.message.reply_text(
         "Admin Panel:",
@@ -310,6 +312,8 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await start_withdraw_flow(query, context)
     elif query.data == 'support':
         await show_help(query, context)
+    if query.data == 'admin_edit_balance':
+        return await list_all_users(query, context)    
     elif query.data == 'main_menu':
         await query.edit_message_text(
             text="Main Menu",
@@ -317,6 +321,162 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     
     return ConversationHandler.END
+
+async def list_all_users(update_or_query, context: ContextTypes.DEFAULT_TYPE):
+    accounts = account_manager._load_accounts()
+    
+    if not accounts:
+        if hasattr(update_or_query, 'message'):
+            await update_or_query.message.reply_text("❌ No users found")
+        elif hasattr(update_or_query, 'edit_message_text'):
+            await update_or_query.edit_message_text("❌ No users found")
+        else:
+            await context.bot.send_message(chat_id=update_or_query.effective_chat.id, text="❌ No users found")
+        return
+
+    context.user_data['all_accounts'] = accounts
+    context.user_data['current_page'] = 0
+
+    await display_accounts_page(update_or_query, context)
+    return EDIT_USER_BALANCE  
+
+
+async def display_accounts_page(update_or_query, context: ContextTypes.DEFAULT_TYPE):
+    accounts = context.user_data['all_accounts']
+    current_page = context.user_data['current_page']
+    per_page = 5
+    total_pages = (len(accounts) + per_page - 1) // per_page
+    
+    start_idx = current_page * per_page
+    end_idx = start_idx + per_page
+    page_accounts = accounts[start_idx:end_idx]
+    
+    message = "👥 All Users (Page {}/{})\n\n".format(current_page + 1, total_pages)
+    buttons = []
+    for acc in page_accounts:
+        balance = float(acc.get('balance', 0))
+        message += "🆔: `{}` | 💰: ${:.2f}\n".format(acc['telegram_id'], balance)
+        buttons.append([InlineKeyboardButton(
+            f"Edit {acc['telegram_id']}",
+            callback_data=f"edit_user_{acc['telegram_id']}"
+        )])
+    
+    # pagination controls
+    pagination_buttons = []
+    if current_page > 0:
+        pagination_buttons.append(InlineKeyboardButton("⬅️ Previous", callback_data="prev_page"))
+    if end_idx < len(accounts):
+        pagination_buttons.append(InlineKeyboardButton("Next ➡️", callback_data="next_page"))
+
+    if pagination_buttons:
+            buttons.append(pagination_buttons)
+        
+    buttons.append([InlineKeyboardButton("🔙 Back to Admin", callback_data="admin_menu")])
+        
+    try:   
+        if hasattr(update_or_query, 'edit_message_text'):
+            await update_or_query.edit_message_text(
+                text=message,
+                parse_mode='Markdown',
+                reply_markup=InlineKeyboardMarkup(buttons)
+                )
+        else:
+            msg = getattr(update_or_query, 'message', None)
+            if msg:
+                await msg.reply_text(
+                    text=message,
+                    parse_mode='Markdown',
+                    reply_markup=InlineKeyboardMarkup(buttons)
+                )
+            else:
+                await context.bot.send_message(
+                    chat_id=update_or_query.effective_chat.id,
+                    text=message,
+                    parse_mode='Markdown',
+                    reply_markup=InlineKeyboardMarkup(buttons)
+                )
+    except Exception as e:
+        logger.error(f"Error displaying accounts page: {e}")
+        # Fallback to simple message if rich display fails
+        if hasattr(update_or_query, 'message'):
+            await update_or_query.message.reply_text("Error displaying user list")
+        else:
+            await update_or_query.reply_text("Error displaying user list")     
+
+
+
+async def edit_user_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.data.split('_')[-1]
+    context.user_data['edit_user_id'] = user_id
+    
+    await query.edit_message_text(
+        f"Editing user {user_id}\n\n"
+        "Send me the new balance amount:",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔙 Cancel", callback_data="cancel_edit")]
+        ])
+    )
+    return EDIT_USER_BALANCE
+
+# async def search_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
+#     query = update.callback_query
+#     await query.answer()
+    
+#     await query.edit_message_text(
+#         "Send me the user ID or username to search for:",
+#         reply_markup=InlineKeyboardMarkup([
+#             [InlineKeyboardButton("🔙 Cancel", callback_data="admin_menu")]
+#         ])
+#     )
+#     return SEARCH_USERS
+
+async def process_new_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        user_id = context.user_data['edit_user_id']
+        new_balance = float(update.message.text)
+        
+        if account_manager.set_balance(user_id, new_balance):
+            await update.message.reply_text(
+                f"✅ Updated balance for user {user_id} to ${new_balance:.2f}",
+                reply_markup=back_menu_keyboard()
+            )     
+              # Log this admin action
+            admin_id = update.effective_user.id
+            tx_logger.log_trade(
+                user_id=user_id,
+                tx_type="ADMIN_BALANCE_EDIT",
+                amount=new_balance,
+                notes=f"Edited by admin {admin_id}"
+            )
+        else:
+            await update.message.reply_text("❌ Failed to update balance")
+            
+    except ValueError:
+        await update.message.reply_text("❌ Please enter a valid number")
+        return EDIT_USER_BALANCE
+
+    return ConversationHandler.END 
+
+async def cancel_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text("Edit cancelled", reply_markup=back_menu_keyboard())
+    return ConversationHandler.END
+
+async def handle_page_change(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()   
+    if query.data == "prev_page":
+        context.user_data['current_page'] -= 1
+    elif query.data == "next_page":
+        context.user_data['current_page'] += 1
+    
+    await display_accounts_page(query, context)
+    return EDIT_USER_BALANCE
+
 
 async def notify_admin_deposit(user_id: int, amount: float, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -331,7 +491,7 @@ async def notify_admin_deposit(user_id: int, amount: float, context: ContextType
             f.write(f"{user_id},{user.username},{gross_amount},{tx_hash},{datetime.now()}\n")
 
         keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("✅ Verify Deposit", callback_data=f"verify_deposit_{user_id}_{user.username}_{formatted_amount}")],
+            [InlineKeyboardButton("✅ Verify Deposit", callback_data=f"verify_deposit_{user_id}_{formatted_amount}")],
             [InlineKeyboardButton("❌ Reject Deposit", callback_data=f"reject_deposit_{user_id}_{formatted_amount}")]
         ])
         
@@ -381,9 +541,6 @@ async def notify_admin_withdrawal(context: ContextTypes.DEFAULT_TYPE, admin_id: 
         )
     except Exception as e:
         logger.error(f"Error notifying admin: {e}")
-
-
-
 
 
 async def handle_admin_verification(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -820,7 +977,7 @@ async def calculate_and_distribute_profits(context: ContextTypes.DEFAULT_TYPE = 
         # Filter out deposits plus withdraws and already processed trades
         valid_trades = closed_positions[
             (closed_positions['symbol'].notna()) &
-            (closed_positions['type'].isin(['buy', 'sell'])) &  # Only buy/sell trades
+            (closed_positions['position_type'].isin(['buy', 'sell'])) &  # Only buy/sell trades
             (~closed_positions['ticket'].isin(processed_trades)) &
             (~closed_positions['comment'].str.contains("deposit|withdraw|balance|adjust|transfer|funding", case=False, na=False))
         ]
@@ -1094,6 +1251,27 @@ def main():
         ],
         allow_reentry=True
     )
+
+    edit_balance_conv = ConversationHandler(
+            entry_points=[CallbackQueryHandler(edit_user_balance, pattern=r'^edit_user_\d+$')],
+            states={
+                EDIT_USER_BALANCE: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, process_new_balance),
+                    CallbackQueryHandler(cancel_edit, pattern=r'^cancel_edit$')
+                ]
+            },
+            fallbacks=[
+                CallbackQueryHandler(cancel_edit, pattern=r'^cancel_edit$'),
+                CallbackQueryHandler(handle_page_change, pattern=r'^(prev_page|next_page)$'),
+                CallbackQueryHandler(list_all_users, pattern=r'^admin_menu$')
+            ],
+            allow_reentry=True
+        )
+    
+    app.add_handler(edit_balance_conv)
+    app.add_handler(CallbackQueryHandler(handle_page_change, pattern=r'^(prev_page|next_page)$'))
+    app.add_handler(CallbackQueryHandler(list_all_users, pattern=r'^admin_edit_balance$'))
+
     app.add_handler(conv_handler)
     app.post_init = on_startup
 
