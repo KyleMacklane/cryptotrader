@@ -1,3 +1,6 @@
+            InlineKeyboardButton("📈 Trading Stats", callback_data='tradingstats')
+
+
 async def trading_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         mt4 = EACommunicator_API()
