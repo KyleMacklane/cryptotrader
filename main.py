@@ -110,6 +110,9 @@ def main_menu_keyboard():
             InlineKeyboardButton("📞 Support", callback_data='support')
         ],
         [
+            InlineKeyboardButton("📈 Trading Stats", callback_data='tradingstats')
+        ],
+        [
             InlineKeyboardButton("🔄 Refresh", callback_data='main_menu')
         ]
     ])
@@ -333,7 +336,10 @@ async def trading_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         trades = mt4.Get_all_closed_positions()
 
         if trades is None or trades.empty:
-            await update.message.reply_text("❌ No closed trades found.")
+            if update.message:
+                await update.message.reply_text("❌ No closed trades found.")
+            elif update.callback_query:
+                await update.callback_query.message.reply_text("❌ No closed trades found.")
             return
         
 
@@ -373,10 +379,22 @@ async def trading_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
             + calculate_stats(monthly_trades, "📆 *Monthly*")
         )
 
-        await update.message.reply_text(msg, parse_mode='Markdown')
+        if update.message:
+            await update.message.reply_text(msg, parse_mode='Markdown')
+        elif update.callback_query:
+            await update.callback_query.answer()
+            await update.callback_query.message.reply_text(msg, parse_mode='Markdown')
+
+
+        
+
     except Exception as e:
         logger.error(f"Failed to send trading stats: {e}")
-        await update.message.reply_text("⚠️ Failed to generate trading statistics.")
+        error_msg = "⚠️ Failed to generate trading statistics."
+        if update.message:
+            await update.message.reply_text(error_msg)
+        elif update.callback_query:
+            await update.callback_query.message.reply_text(error_msg)
 
 
 async def list_all_users(update_or_query, context: ContextTypes.DEFAULT_TYPE):
@@ -1155,11 +1173,7 @@ async def reconcile_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        get_trading_stats(),
-        parse_mode='Markdown'
-    )
+
 
 async def referral_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -1268,7 +1282,6 @@ def main():
     # app.add_handler(CommandHandler('withdraw', start_withdraw_flow))
     app.add_handler(CommandHandler('account', show_account))
     app.add_handler(CommandHandler('help', show_help))
-    app.add_handler(CommandHandler('stats', stats_command))
     app.add_handler(CommandHandler('referral', referral_command))
     app.add_handler(CommandHandler('wallets', show_wallets))
     app.add_handler(CommandHandler('faqs', faq_command))
@@ -1319,6 +1332,8 @@ def main():
     app.add_handler(edit_balance_conv)
     app.add_handler(CallbackQueryHandler(handle_page_change, pattern=r'^(prev_page|next_page)$'))
     app.add_handler(CallbackQueryHandler(list_all_users, pattern=r'^admin_edit_balance$'))
+    app.add_handler(CallbackQueryHandler(trading_stats, pattern='^tradingstats$'))
+
 
     app.add_handler(conv_handler)
     app.post_init = on_startup

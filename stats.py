@@ -5,7 +5,10 @@ async def trading_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         trades = mt4.Get_all_closed_positions()
 
         if trades is None or trades.empty:
-            await update.message.reply_text("❌ No closed trades found.")
+            if update.message:
+                await update.message.reply_text("❌ No closed trades found.")
+            elif update.callback_query:
+                await update.callback_query.message.reply_text("❌ No closed trades found.")
             return
         
 
@@ -45,10 +48,22 @@ async def trading_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
             + calculate_stats(monthly_trades, "📆 *Monthly*")
         )
 
-        await update.message.reply_text(msg, parse_mode='Markdown')
+        if update.message:
+            await update.message.reply_text(msg, parse_mode='Markdown')
+        elif update.callback_query:
+            await update.callback_query.answer()
+            await update.callback_query.message.reply_text(msg, parse_mode='Markdown')
+
+
+        
+
     except Exception as e:
         logger.error(f"Failed to send trading stats: {e}")
-        await update.message.reply_text("⚠️ Failed to generate trading statistics.")
+        error_msg = "⚠️ Failed to generate trading statistics."
+        if update.message:
+            await update.message.reply_text(error_msg)
+        elif update.callback_query:
+            await update.callback_query.message.reply_text(error_msg)
 
 
-    app.add_handler(CommandHandler('tradingstats',trading_stats))
+    app.add_handler(CallbackQueryHandler(trading_stats, pattern='^tradingstats$'))
