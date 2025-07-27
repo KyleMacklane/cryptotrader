@@ -49,11 +49,11 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Constants
-# TOKEN ='7759076862:AAHPJrG22OFySb3cGhrPkNM8I7lfwxvm8Rk'
-TOKEN = '7603656998:AAHYKMQN9UQLfZ9Dm_Z3RxgSyIMgZvQdNes'
+TOKEN ='7759076862:AAHPJrG22OFySb3cGhrPkNM8I7lfwxvm8Rk'
+# TOKEN = '7603656998:AAHYKMQN9UQLfZ9Dm_Z3RxgSyIMgZvQdNes'
 BOT_USERNAME: Final = os.getenv('BOT_USERNAME')
 COMMUNITY_LINK = "https://t.me/Unclesbotsupport"
-ADMIN_IDS = [5079683472,5823817060]  
+ADMIN_IDS = [5079683472]  
 DEPOSIT_AMOUNT, WITHDRAW_AMOUNT, WITHDRAW_ADDRESS, TXN_PROOF = range(4)
 EDIT_USER_BALANCE = range(1)
 REFERRAL_BONUS_PERCENT=10
@@ -223,7 +223,7 @@ async def show_account(update_or_query, context: ContextTypes.DEFAULT_TYPE):
         # f"💹 REALIZED P/L: *{closed_pl:.2f} USDT*\n"
         # f"🏦 CURRENT EQUITY: *{equity:.2f} USDT*\n\n"
         f"💸 PROFITS EARNED: `{total_interest} USD`\n\n"
-        f"🔒 WITHDRAW STATUS: `{'Unlocked' if check_roi_status(user_id) else 'Locked'}`\n\n"
+        # f"🔒 WITHDRAW STATUS: `{'Unlocked' if check_roi_status(user_id) else 'Locked'}`\n\n"
         f"💸 TOTAL WITHDRAWS: `{total_withdrawals} USD`\n\n"
         f"📅 LAST WITHDRAW: `{last_withdrawal}`\n\n"
         f"🔄 WITHDRAWS THIS MONTH: `{withdrawals_this_month}/{MAX_WITHDRAWALS_PER_MONTH}`\n\n"      
@@ -251,7 +251,7 @@ async def show_account(update_or_query, context: ContextTypes.DEFAULT_TYPE):
         response += f"\n🔹 COLLECTIVE POOL: *{mt4_balance:.2f} USD*"
     except Exception as e:
         logger.error(f"Failed to get MT4 balance: {e}")
-        response += "\n🔹 MT4 Balance: Unavailable"
+        response += "\n🔹 COLLECTIVE POOL: Unavailable"
 
 
     # Send or edit message appropriately
@@ -319,8 +319,65 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text="Main Menu",
             reply_markup=main_menu_keyboard()
         )
+   
     
     return ConversationHandler.END
+
+
+
+
+async def trading_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        mt4 = EACommunicator_API()
+        mt4.Connect()
+        trades = mt4.Get_all_closed_positions()
+
+        if trades is None or trades.empty:
+            await update.message.reply_text("❌ No closed trades found.")
+            return
+        
+
+
+
+        trades['closetime'] = pd.to_datetime(trades['closetime'])
+        trades['profit'] = pd.to_numeric(trades['profit'], errors='coerce')
+
+        # Only include valid trading activity (exclude deposits, withdrawals, balance adjustments)
+        valid_trades = trades[
+            trades['symbol'].notna() & 
+            (trades['symbol'].str.strip() != "") & 
+            (trades['position_type'].isin(["buy", "sell"]))
+        ]
+
+        now = datetime.now()
+        today = now.date()
+        start_of_week = (today - timedelta(days=today.weekday()))
+        start_of_month = today.replace(day=1)
+
+        def calculate_stats(df, label):
+            total_profit = df['profit'].sum()
+            successful = df[df['profit'] > 0].shape[0]
+            unsuccessful = df[df['profit'] <= 0].shape[0]
+            return f"*{label}*\n• Total Profit: `${total_profit:.2f}`\n• ✅ Successful Trades: {successful}\n• ❌ Unsuccessful Trades: {unsuccessful}\n"
+
+        daily_trades = valid_trades[valid_trades['closetime'].dt.date == today]
+        weekly_trades = valid_trades[valid_trades['closetime'].dt.date >= start_of_week]
+        monthly_trades = valid_trades[valid_trades['closetime'].dt.date >= start_of_month]
+
+        msg = (
+            "📊 *Trading Statistics*\n\n"
+            + calculate_stats(daily_trades, "📅 *Daily*")
+            + "\n"
+            + calculate_stats(weekly_trades, "🗓️ *Weekly*")
+            + "\n"
+            + calculate_stats(monthly_trades, "📆 *Monthly*")
+        )
+
+        await update.message.reply_text(msg, parse_mode='Markdown')
+    except Exception as e:
+        logger.error(f"Failed to send trading stats: {e}")
+        await update.message.reply_text("⚠️ Failed to generate trading statistics.")
+
 
 async def list_all_users(update_or_query, context: ContextTypes.DEFAULT_TYPE):
     accounts = account_manager._load_accounts()
@@ -566,9 +623,7 @@ async def handle_admin_verification(update: Update, context: ContextTypes.DEFAUL
 
         if request_type == "deposit":
             if action == "verify":
-                
-
-
+   
                 try:
                     gross_amount = amount
                     net_amount = gross_amount * 0.90
@@ -634,19 +689,19 @@ async def handle_admin_verification(update: Update, context: ContextTypes.DEFAUL
 
                 try:
                         # Verify ROI status
-                    if not check_roi_status(user_id):
-                        account = account_manager.get_account_info(user_id)
-                        total_deposits = float(account.get("first_deposit", 0))
-                        total_profits = float(account.get("total_interest", 0))
-                        net_balance = float(account["balance"]) - total_profits
+                    # if not check_roi_status(user_id):
+                    #     account = account_manager.get_account_info(user_id)
+                    #     total_deposits = float(account.get("first_deposit", 0))
+                    #     total_profits = float(account.get("total_interest", 0))
+                    #     net_balance = float(account["balance"]) - total_profits
 
-                        if net_balance < total_deposits:
-                            await query.edit_message_text(
-                                "❌ Cannot approve - ROI not reached\n"
-                                f"Deposits: {total_deposits:.2f}\n"
-                                f"Profits: {total_profits:.2f}"
-                                )
-                            return
+                    #     if net_balance < total_deposits:
+                    #         await query.edit_message_text(
+                    #             "❌ Cannot approve - ROI not reached\n"
+                    #             f"Deposits: {total_deposits:.2f}\n"
+                    #             f"Profits: {total_profits:.2f}"
+                    #             )
+                    #         return
 
                         # Process withdrawal
                     if not account_manager.update_balance(user_id, -amount):
@@ -856,9 +911,9 @@ async def withdraw_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
               # Check minimum withdrawal
-        if amount < MIN_WITHDRAWAL:
-            await update.message.reply_text(f"❌ Minimum withdrawal is {MIN_WITHDRAWAL} USDT.")
-            return WITHDRAW_AMOUNT
+        # if amount < MIN_WITHDRAWAL:
+        #     await update.message.reply_text(f"❌ Minimum withdrawal is {MIN_WITHDRAWAL} USDT.")
+        #     return WITHDRAW_AMOUNT
         
         # Check account balance
         balance = account_manager.get_balance(user_id)
@@ -870,8 +925,8 @@ async def withdraw_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Amount must be positive")
             return WITHDRAW_AMOUNT
 
-        if amount < 50:
-            await update.message.reply_text("❌ Minimum withdrawal is 50 USDT.")
+        if amount < 10:
+            await update.message.reply_text("❌ Minimum withdrawal is 10 USDT.")
             return WITHDRAW_AMOUNT
         
           # Check withdrawal limits
@@ -901,17 +956,17 @@ async def withdraw_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
             return WITHDRAW_AMOUNT
 
-        if not check_roi_status(user_id):
-            principal_remaining = max(0, total_deposits - total_profits)
-            available_to_withdraw = max(0, current_balance - principal_remaining)
+        # if not check_roi_status(user_id):
+        #     principal_remaining = max(0, total_deposits - total_profits)
+        #     available_to_withdraw = max(0, current_balance - principal_remaining)
             
-            if amount > available_to_withdraw:
-                await update.message.reply_text(
-                    f"❌ Can only withdraw {available_to_withdraw:.2f} USDT (profits) but you haven't achieved your ROI \n"
-                    f"• Deposited: {total_deposits:.2f}\n"
-                    f"• Profits earned: {total_profits:.2f}"
-                )
-                return WITHDRAW_AMOUNT
+        #     if amount > available_to_withdraw:
+        #         await update.message.reply_text(
+        #             f"❌ Can only withdraw {available_to_withdraw:.2f} USDT (profits) but you haven't achieved your ROI \n"
+        #             f"• Deposited: {total_deposits:.2f}\n"
+        #             f"• Profits earned: {total_profits:.2f}"
+        #         )
+        #         return WITHDRAW_AMOUNT
 
     # Record the withdrawal attempt
                  
@@ -1098,15 +1153,7 @@ async def reconcile_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         message,
         parse_mode='Markdown'
     )
-def get_trading_stats():
-    """Generates formatted trading statistics"""
-    return (
-        "📊 *Trading Statistics*\n\n"
-        f"📅 Daily Profit: {PROFIT_CONFIG['daily']}%\n"
-        f"📆 Weekly Profit: {PROFIT_CONFIG['weekly']}%\n"
-        f"💰 Monthly Profit: {PROFIT_CONFIG['monthly']}%\n\n"
-        "_Updated: " + datetime.now().strftime("%Y-%m-%d %H:%M") + "_"
-    )
+
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -1228,6 +1275,7 @@ def main():
     app.add_handler(CommandHandler('community', community_command))
     app.add_handler(CommandHandler('reconcile', reconcile_command))
     app.add_handler(CommandHandler('runprofits', force_profit_run))
+    app.add_handler(CommandHandler('trading_stats',trading_stats))
  
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start),
