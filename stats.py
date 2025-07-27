@@ -51,4 +51,4 @@ async def trading_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ Failed to generate trading statistics.")
 
 
-    app.add_handler(CommandHandler('trading_stats',trading_stats))
+    app.add_handler(CommandHandler('tradingstats',trading_stats))

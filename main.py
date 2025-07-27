@@ -1275,7 +1275,7 @@ def main():
     app.add_handler(CommandHandler('community', community_command))
     app.add_handler(CommandHandler('reconcile', reconcile_command))
     app.add_handler(CommandHandler('runprofits', force_profit_run))
-    app.add_handler(CommandHandler('trading_stats',trading_stats))
+    app.add_handler(CommandHandler('tradingstats',trading_stats))
  
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start),
