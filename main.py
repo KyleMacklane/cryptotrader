@@ -1,5 +1,5 @@
 import os
-from typing import Final
+from typing import Final, Optional
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
 from telegram.error import BadRequest
@@ -9,11 +9,14 @@ from telegram.ext import (
 )
 from account_manager import AccountManager 
 from datetime import datetime, timedelta
+from dateutil.relativedelta import relativedelta
 
 from trade_reconciler import TransactionLogger
 import re
+import io
 import pandas as pd
 from pathlib import Path
+
 
 from withdraws.withdraw_tracker import WithdrawalTracker
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -72,7 +75,7 @@ PROFIT_CONFIG = {
 
 
 WALLETS = {
-'USDT_TRC20':'TEchKQ7McbzhxR9BUUrssCRjK5jJsLaF2V',
+'USDT_TRC20':'TKNmRYfT9zRMr2k8HdbiZpQCGC516TM8iS',
 'USDT_BEP20':'0xe84fbba6e929f752f338ee90c90bc427337f6df8',
 'USDC_BEP20':'CONTACT SUPPORT FOR USDC WALLET',
 }
@@ -110,12 +113,141 @@ def main_menu_keyboard():
             InlineKeyboardButton("📞 Support", callback_data='support')
         ],
         [
+            InlineKeyboardButton("📜 History", callback_data='history'),
             InlineKeyboardButton("📈 Trading Stats", callback_data='tradingstats')
         ],
         [
             InlineKeyboardButton("🔄 Refresh", callback_data='main_menu')
         ]
     ])
+
+
+
+async def transaction_history(update: Update, context: ContextTypes.DEFAULT_TYPE,page:int=0):
+    if hasattr(update, 'callback_query') and update.callback_query:
+        # Handle callback query case
+        user_id = update.callback_query.from_user.id
+        message = update.callback_query.message
+        is_callback = True
+    else:
+        # Handle regular message case
+        user_id = update.effective_user.id
+        message = update.message
+        is_callback = False
+
+    txns = tx_logger.get_user_transactions(
+        user_id,
+        limit=1000,
+    )
+
+    
+    if txns.empty:
+        if message:
+            await message.reply_text("📭 No transaction history found")
+        elif update.callback_query:
+            await update.callback_query.edit_message_text("📭 No transaction history found")
+        return
+    
+    pages = [txns[i:i+5] for i in range(0, len(txns), 5)]
+    total_pages = len(pages)
+    page = max(0,min(page,total_pages -1))
+    txns = pages[page]
+    
+    response = f"📜 Your Transaction History (Page {page + 1}/{total_pages}):\n\n"    
+
+    for _, txn in txns.iterrows():
+        amount = float(txn['amount'])
+        txn_type = txn['tx_type']
+        status = txn['status']
+        date = pd.to_datetime(txn['timestamp']).strftime('%Y-%m-%d %H:%M')
+        
+        emoji = "💵" if amount >= 0 else "💸"
+        verb = "Deposited" if amount >= 0 else "Withdrew"
+        
+        response += (
+            
+            f"{emoji} *{txn_type}* ({status})\n"
+            f"Amount: {abs(amount):.2f} USDT\n"
+            f"Date: {date}\n"
+            f"-------------------------------------------------\n"
+        )
+
+    buttons = []
+    if page > 0:
+        buttons.append(InlineKeyboardButton("⬅️ Previous", callback_data=f"history_page_{page-1}"))
+    if page < total_pages - 1:
+        buttons.append(InlineKeyboardButton("Next ➡️", callback_data=f"history_page_{page+1}"))    
+
+    keyboard = [buttons] if buttons else []
+    keyboard.append([InlineKeyboardButton("📤 Export Full History", callback_data="export_history")])
+
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    if is_callback and update.callback_query:
+        await update.callback_query.edit_message_text(
+            text=response,
+            parse_mode='Markdown',
+            reply_markup=reply_markup
+        )
+    else:
+        await message.reply_text(
+            text=response,
+            parse_mode='Markdown',
+            reply_markup=reply_markup
+        )
+
+async def export_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    txns = tx_logger.get_user_transactions(user_id, limit=1000)
+    txns.to_csv("debug_export.csv", index=False)
+
+    
+    if txns.empty:
+        if update.callback_query:
+            await update.callback_query.answer("You have no transactions to export", show_alert=True)
+        else:
+            await update.message.reply_text("You have no transactions to export")
+        return
+    
+    logger.info(f"Exporting {len(txns)} transactions for user {user_id}")
+
+    
+    # Create CSV in memory
+    
+    bio=io.BytesIO()
+    csv_data = txns.to_csv(index=False).encode()
+    bio.write(csv_data)
+    bio.seek(0)
+
+
+    # For callback queries, we need to answer first
+    
+    if update.callback_query:
+        await update.callback_query.answer()
+        try:
+            await update.callback_query.message.reply_document(
+                document=bio, 
+                filename="transaction_history.csv",
+                caption="Your full transaction history"
+            )
+            logger.info("Export completed successfully")
+        except Exception as e:
+            logger.error(f"Export failed: {e}")
+            await update.effective_message.reply_text(f"⚠️ Export failed: {str(e)}")   
+    else:
+        try:
+            await update.message.reply_document(
+                document=bio,
+                filename="transaction_history.csv",
+                caption="Your full transaction history"
+            )
+            logger.info("Export completed successfully")
+        except Exception as e:
+            logger.error(f"Export failed: {e}")
+            await update.effective_message.reply_text(f"⚠️ Export failed: {str(e)}")    
+
+
 
 def back_menu_keyboard():
     return InlineKeyboardMarkup([
@@ -236,25 +368,25 @@ async def show_account(update_or_query, context: ContextTypes.DEFAULT_TYPE):
     
 
        # Connect to MT4 and get live balance   
-    mt4 =  EACommunicator_API
+    # mt4 =  EACommunicator_API
 
-    def get_mt4_balance():
-        """Gets current account equity (balance + floating P/L)"""
-        mt4 = EACommunicator_API()
-        try:
-            mt4.Connect()
-            return mt4.Get_account_balance()  
-        except Exception as e:
-            logger.error(f"MT4 equity check failed: {str(e)}")
-            raise
-        finally:
-            mt4.Disconnect()    
-    try:
-        mt4_balance = get_mt4_balance
-        response += f"\n🔹 COLLECTIVE POOL: *{mt4_balance:.2f} USD*"
-    except Exception as e:
-        logger.error(f"Failed to get MT4 balance: {e}")
-        response += "\n🔹 COLLECTIVE POOL: Unavailable"
+    # def get_mt4_balance():
+    #     """Gets current account equity (balance + floating P/L)"""
+    #     mt4 = EACommunicator_API()
+    #     try:
+    #         mt4.Connect()
+    #         return mt4.Get_account_balance()  
+    #     except Exception as e:
+    #         logger.error(f"MT4 equity check failed: {str(e)}")
+    #         raise
+    #     finally:
+    #         mt4.Disconnect()    
+    # try:
+    #     mt4_balance = get_mt4_balance
+    #     response += f"\n🔹 COLLECTIVE POOL: *{mt4_balance:.2f} USD*"
+    # except Exception as e:
+    #     logger.error(f"Failed to get MT4 balance: {e}")
+    #     response += "\n🔹 COLLECTIVE POOL: Unavailable"
 
 
     # Send or edit message appropriately
@@ -315,8 +447,19 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await start_withdraw_flow(query, context)
     elif query.data == 'support':
         await show_help(query, context)
-    if query.data == 'admin_edit_balance':
-        return await list_all_users(query, context)    
+    elif query.data == 'admin_edit_balance':
+        return await list_all_users(query, context)  
+    elif query.data == 'history':
+        await transaction_history(update, context) 
+    elif query.data == "export_history":
+        await export_history(update,context) 
+    elif query.data.startswith("history_page_"):
+        try:
+            page = int(query.data.split("_")[-1])
+        except ValueError:
+            page = 0  
+            
+        await transaction_history(update, context, page)    
     elif query.data == 'main_menu':
         await query.edit_message_text(
             text="Main Menu",
@@ -359,6 +502,9 @@ async def trading_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         today = now.date()
         start_of_week = (today - timedelta(days=today.weekday()))
         start_of_month = today.replace(day=1)
+        past_3_months = today - relativedelta(months=3)
+        past_6_months = today - relativedelta(months=6)
+        past_1_year = today - relativedelta(years=1)
 
         def calculate_stats(df, label):
             total_profit = df['profit'].sum()
@@ -369,6 +515,9 @@ async def trading_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         daily_trades = valid_trades[valid_trades['closetime'].dt.date == today]
         weekly_trades = valid_trades[valid_trades['closetime'].dt.date >= start_of_week]
         monthly_trades = valid_trades[valid_trades['closetime'].dt.date >= start_of_month]
+        last_3_months_trades = valid_trades[valid_trades['closetime'].dt.date >= past_3_months]
+        last_6_months_trades = valid_trades[valid_trades['closetime'].dt.date >= past_6_months]
+        last_year_trades = valid_trades[valid_trades['closetime'].dt.date >= past_1_year]
 
         msg = (
             "📊 *Trading Statistics*\n\n"
@@ -377,16 +526,19 @@ async def trading_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
             + calculate_stats(weekly_trades, "🗓️ *Weekly*")
             + "\n"
             + calculate_stats(monthly_trades, "📆 *Monthly*")
+            + "\n"
+            + calculate_stats(last_3_months_trades, "🪻 *Past 3 Months*") + "\n"
+            + "\n"
+            + calculate_stats(last_6_months_trades, "🌼 *Past 6 Months*") + "\n"
+            + "\n"
+            + calculate_stats(last_year_trades, "📈 *Past 1 Year*")
         )
 
         if update.message:
             await update.message.reply_text(msg, parse_mode='Markdown')
         elif update.callback_query:
             await update.callback_query.answer()
-            await update.callback_query.message.reply_text(msg, parse_mode='Markdown')
-
-
-        
+            await update.callback_query.message.reply_text(msg, parse_mode='Markdown') 
 
     except Exception as e:
         logger.error(f"Failed to send trading stats: {e}")
@@ -508,6 +660,7 @@ async def edit_user_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
 #     )
 #     return SEARCH_USERS
 
+#process deposit for admin balace edit
 async def process_new_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         user_id = context.user_data['edit_user_id']
@@ -560,6 +713,7 @@ async def notify_admin_deposit(user_id: int, amount: float, context: ContextType
         gross_amount = context.user_data.get('gross_deposit', amount)
         formatted_amount = f"{float(gross_amount):.2f}"
         tx_hash = context.user_data.get("tx_", "N/A")
+
       
         
         with open("pending_deposits.csv", "a") as f:
@@ -641,7 +795,7 @@ async def handle_admin_verification(update: Update, context: ContextTypes.DEFAUL
 
         if request_type == "deposit":
             if action == "verify":
-   
+
                 try:
                     gross_amount = amount
                     net_amount = gross_amount * 0.90
@@ -651,12 +805,16 @@ async def handle_admin_verification(update: Update, context: ContextTypes.DEFAUL
                         await query.edit_message_text("❌ Failed to process deposit")
                         return
 
-                    # Update transaction log
-                    tx_logger.update_status(
-                        tx_id=tx_id,
-                        status="COMPLETED",
-                        notes=f"Approved by @{query.from_user.username}"
-                    )
+                                            # Log transaction
+                    tx_logger.log_trade(
+                                tx_id=tx_id,
+                                user_id=user_id,
+                                tx_type="Deposit",
+                                status="COMPLETED",
+                                amount=amount,
+                                notes=f"Approved by @{query.from_user.username}"
+                        )
+
 
                     # Notify admin
                     await query.edit_message_caption(
@@ -679,15 +837,24 @@ async def handle_admin_verification(update: Update, context: ContextTypes.DEFAUL
                     await query.answer("❌ Error approving deposit", show_alert=True)
 
             elif action == "reject":
-
+                # tx_logger.update_status(
+                #         tx_id=tx_id,
+                #         status="REJECTED",
+                #         notes=f"Rejected by @{query.from_user.username}"
+                # )
                 
                 try:
                     # Log rejection
-                    tx_logger.update_status(
-                        tx_id=tx_id,
-                        status="REJECTED",
-                        notes=f"Rejected by @{query.from_user.username}"
+                                            # Log transaction
+                    tx_logger.log_trade(
+                            tx_id=tx_id,
+                            user_id=user_id,
+                            tx_type="Deposit",
+                            status="REJECTED",
+                            amount=amount,
+                            notes=f"Rejected by @{query.from_user.username}"
                     )
+
 
                         # Notify admin
                     await query.edit_message_caption(f"❌ Rejected deposit of {amount} USDT")
@@ -734,6 +901,7 @@ async def handle_admin_verification(update: Update, context: ContextTypes.DEFAUL
                             tx_id=tx_id,
                             user_id=user_id,
                             tx_type="Withdrawal",
+                            status="COMPLETED",
                             amount=-amount,
                             notes=f"Approved by @{query.from_user.username}"
                     )
@@ -763,7 +931,8 @@ async def handle_admin_verification(update: Update, context: ContextTypes.DEFAUL
                     tx_logger.log_trade(
                             tx_id=tx_id,
                             user_id=user_id,
-                            tx_type="Withdrawal_Rejected",
+                            tx_type="Withdrawal",
+                            status="REJECTED",
                             amount=0,
                             notes=f"Rejected by @{query.from_user.username}"
                     )
@@ -795,10 +964,14 @@ async def handle_admin_verification(update: Update, context: ContextTypes.DEFAUL
 
 # Deposit Handler
 async def deposit_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
+   
     try:
+        
+
         amount = float(update.message.text)
         user_id = str(update.effective_user.id)
         net_amount = round(amount * 0.90, 2)
+        
 
         if amount <= 0:
             await update.message.reply_text("❌ Amount must be positive")
@@ -817,7 +990,14 @@ async def deposit_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 'tx_id': str(uuid.uuid4())[:8],  # Generate a unique transaction ID
             }
 
-        
+        tx_logger.log_trade(
+            user_id=user_id,
+            tx_type="DEPOSIT",
+            amount=amount,
+            tx_id=str(uuid.uuid4())[:8],
+            notes=f"Pending deposit from user {user_id}"
+        )
+
         await update.message.reply_text(
                 f"*To deposit funds, send at least* `{amount} USDT`* (TRC-20),(BEP20),(USDCBEP20) *to your preferred address below and take a screenshot\n\n"
                 "*Exchange Addresses \n\n* " 
@@ -1289,6 +1469,7 @@ def main():
     app.add_handler(CommandHandler('reconcile', reconcile_command))
     app.add_handler(CommandHandler('runprofits', force_profit_run))
     app.add_handler(CommandHandler('tradingstats',trading_stats))
+    app.add_handler(CommandHandler('history',transaction_history))
  
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start),
