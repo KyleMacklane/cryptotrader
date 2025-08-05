@@ -53,7 +53,7 @@ logger = logging.getLogger(__name__)
 
 # Constants
 TOKEN ='7759076862:AAHPJrG22OFySb3cGhrPkNM8I7lfwxvm8Rk'
-# TOKEN = '7603656998:AAHYKMQN9UQLfZ9Dm_Z3RxgSyIMgZvQdNes'
+# TOKEN = '7603656998:AAHYKMQN9UQLfZ9Dm_Z7759076862:AAHPJrG22OFySb3cGhrPkNM8I7lfwxvm8Rk3RxgSyIMgZvQdNes'
 BOT_USERNAME: Final = os.getenv('BOT_USERNAME')
 COMMUNITY_LINK = "https://t.me/Unclesbotsupport"
 ADMIN_IDS = [5079683472]  
@@ -180,6 +180,7 @@ async def transaction_history(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     keyboard = [buttons] if buttons else []
     keyboard.append([InlineKeyboardButton("📤 Export Full History", callback_data="export_history")])
+    keyboard.append([InlineKeyboardButton("🔙 Back to Main Menu",callback_data="main_menu")])
 
 
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -485,9 +486,6 @@ async def trading_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.callback_query.message.reply_text("❌ No closed trades found.")
             return
         
-
-
-
         trades['closetime'] = pd.to_datetime(trades['closetime'])
         trades['profit'] = pd.to_numeric(trades['profit'], errors='coerce')
 
@@ -501,7 +499,10 @@ async def trading_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         now = datetime.now()
         today = now.date()
         start_of_week = (today - timedelta(days=today.weekday()))
-        start_of_month = today.replace(day=1)
+        start_of_month = today.replace(day=1) #This gives us the first day of the current month, regardless of what today's day is.
+        last_month_end = start_of_month - timedelta(days=1) # We then subtract one day from that to get the last day of last month
+        last_month_start = last_month_end.replace(day=1) # And we replace that with  again to get the first day of last month
+        
         past_3_months = today - relativedelta(months=3)
         past_6_months = today - relativedelta(months=6)
         past_1_year = today - relativedelta(years=1)
@@ -515,23 +516,31 @@ async def trading_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         daily_trades = valid_trades[valid_trades['closetime'].dt.date == today]
         weekly_trades = valid_trades[valid_trades['closetime'].dt.date >= start_of_week]
         monthly_trades = valid_trades[valid_trades['closetime'].dt.date >= start_of_month]
+        
+        last_month_trades = valid_trades[
+            (valid_trades['closetime'].dt.date >= last_month_start) &
+            (valid_trades['closetime'].dt.date <= last_month_end)
+        ]
+        
         last_3_months_trades = valid_trades[valid_trades['closetime'].dt.date >= past_3_months]
         last_6_months_trades = valid_trades[valid_trades['closetime'].dt.date >= past_6_months]
         last_year_trades = valid_trades[valid_trades['closetime'].dt.date >= past_1_year]
 
         msg = (
             "📊 *Trading Statistics*\n\n"
-            + calculate_stats(daily_trades, "📅 *Daily*")
+            + calculate_stats(daily_trades, "📅 *Today*")
             + "\n"
-            + calculate_stats(weekly_trades, "🗓️ *Weekly*")
+            + calculate_stats(weekly_trades, "🗓️ *This Week*")
             + "\n"
-            + calculate_stats(monthly_trades, "📆 *Monthly*")
+            + calculate_stats(monthly_trades, "📆 *This Month*")
             + "\n"
-            + calculate_stats(last_3_months_trades, "🪻 *Past 3 Months*") + "\n"
-            + "\n"
-            + calculate_stats(last_6_months_trades, "🌼 *Past 6 Months*") + "\n"
-            + "\n"
-            + calculate_stats(last_year_trades, "📈 *Past 1 Year*")
+            # + calculate_stats(last_month_trades, "📉 *Last Month*")
+            # + "\n"
+            # + calculate_stats(last_3_months_trades, "🪻 *Past 3 Months*") + "\n"
+            # + "\n"
+            # + calculate_stats(last_6_months_trades, "🌼 *Past 6 Months*") + "\n"
+            # + "\n"
+            # + calculate_stats(last_year_trades, "📈 *Past 1 Year*")
         )
 
         if update.message:
