@@ -16,6 +16,7 @@ import re
 import io
 import pandas as pd
 from pathlib import Path
+import uuid
 
 
 from withdraws.withdraw_tracker import WithdrawalTracker
@@ -159,15 +160,18 @@ async def transaction_history(update: Update, context: ContextTypes.DEFAULT_TYPE
         amount = float(txn['amount'])
         txn_type = txn['tx_type']
         status = txn['status']
+        address= txn['address']
         date = pd.to_datetime(txn['timestamp']).strftime('%Y-%m-%d %H:%M')
         
         emoji = "💵" if amount >= 0 else "💸"
         verb = "Deposited" if amount >= 0 else "Withdrew"
+        address_line = f"Address: {address}\n" if txn_type.upper() == "WITHDRAW" else ""
         
         response += (
             
             f"{emoji} *{txn_type}* ({status})\n"
             f"Amount: {abs(amount):.2f} USDT\n"
+            f"{address_line}"
             f"Date: {date}\n"
             f"-------------------------------------------------\n"
         )
@@ -719,18 +723,20 @@ async def notify_admin_deposit(user_id: int, amount: float, context: ContextType
     try:
         user = await context.bot.get_chat(user_id)
         # Use the gross amount from context instead of the net amount
-        gross_amount = context.user_data.get('gross_deposit', amount)
+        gross_amount = context.user_data.get('deposit_data', {}).get('gross_amount', amount)
+
         formatted_amount = f"{float(gross_amount):.2f}"
-        tx_hash = context.user_data.get("tx_", "N/A")
+        tx_id = context.user_data.get('deposit_data', {}).get('tx_id', str(uuid.uuid4())[:8])
+
 
       
         
         with open("pending_deposits.csv", "a") as f:
-            f.write(f"{user_id},{user.username},{gross_amount},{tx_hash},{datetime.now()}\n")
+            f.write(f"{user_id},{user.username},{gross_amount},{tx_id},{datetime.now()}\n")
 
         keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("✅ Verify Deposit", callback_data=f"verify_deposit_{user_id}_{formatted_amount}")],
-            [InlineKeyboardButton("❌ Reject Deposit", callback_data=f"reject_deposit_{user_id}_{formatted_amount}")]
+            [InlineKeyboardButton("✅ Verify Deposit", callback_data=f"verify_deposit_{user_id}_{formatted_amount}_{tx_id}")],
+            [InlineKeyboardButton("❌ Reject Deposit", callback_data=f"reject_deposit_{user_id}_{formatted_amount}_{tx_id}")]
         ])
         
         message = (
@@ -754,7 +760,7 @@ async def notify_admin_deposit(user_id: int, amount: float, context: ContextType
         
 #admin helper
 
-async def notify_admin_withdrawal(context: ContextTypes.DEFAULT_TYPE, admin_id: int, user_id: int, amount: float, address: str):
+async def notify_admin_withdrawal(context: ContextTypes.DEFAULT_TYPE, admin_id: int, user_id: int, amount: float, address: str, tx_id:str):
     try:
         user = await context.bot.get_chat(user_id)
         
@@ -772,8 +778,8 @@ async def notify_admin_withdrawal(context: ContextTypes.DEFAULT_TYPE, admin_id: 
             text=message,
             reply_markup=InlineKeyboardMarkup([
                 [
-                    InlineKeyboardButton("✅ Approve", callback_data=f"approve_withdraw_{user_id}_{amount}_{address}"),
-                    InlineKeyboardButton("❌ Reject", callback_data=f"reject_withdraw_{user_id}_{amount}")
+                    InlineKeyboardButton("✅ Approve", callback_data=f"approve_withdraw_{user_id}_{amount}_{tx_id}"),
+                    InlineKeyboardButton("❌ Reject", callback_data=f"reject_withdraw_{user_id}_{amount}_{tx_id}")
                 ]
             ])
         )
@@ -815,12 +821,9 @@ async def handle_admin_verification(update: Update, context: ContextTypes.DEFAUL
                         return
 
                                             # Log transaction
-                    tx_logger.log_trade(
+                    tx_logger.update_status(
                                 tx_id=tx_id,
-                                user_id=user_id,
-                                tx_type="Deposit",
                                 status="COMPLETED",
-                                amount=amount,
                                 notes=f"Approved by @{query.from_user.username}"
                         )
 
@@ -846,21 +849,13 @@ async def handle_admin_verification(update: Update, context: ContextTypes.DEFAUL
                     await query.answer("❌ Error approving deposit", show_alert=True)
 
             elif action == "reject":
-                # tx_logger.update_status(
-                #         tx_id=tx_id,
-                #         status="REJECTED",
-                #         notes=f"Rejected by @{query.from_user.username}"
-                # )
+
                 
                 try:
                     # Log rejection
-                                            # Log transaction
-                    tx_logger.log_trade(
+                    tx_logger.update_status(
                             tx_id=tx_id,
-                            user_id=user_id,
-                            tx_type="Deposit",
                             status="REJECTED",
-                            amount=amount,
                             notes=f"Rejected by @{query.from_user.username}"
                     )
 
@@ -906,12 +901,9 @@ async def handle_admin_verification(update: Update, context: ContextTypes.DEFAUL
                         logger.warning(f"Failed to update withdrawals for {user_id}")
 
                         # Log transaction
-                    tx_logger.log_trade(
+                    tx_logger.update_status(
                             tx_id=tx_id,
-                            user_id=user_id,
-                            tx_type="Withdrawal",
                             status="COMPLETED",
-                            amount=-amount,
                             notes=f"Approved by @{query.from_user.username}"
                     )
 
@@ -937,12 +929,9 @@ async def handle_admin_verification(update: Update, context: ContextTypes.DEFAUL
             elif action == "reject":
                 try:
                         # Log rejection
-                    tx_logger.log_trade(
+                    tx_logger.update_status(
                             tx_id=tx_id,
-                            user_id=user_id,
-                            tx_type="Withdrawal",
-                            status="REJECTED",
-                            amount=0,
+                            status="Rejected",
                             notes=f"Rejected by @{query.from_user.username}"
                     )
 
@@ -980,6 +969,7 @@ async def deposit_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
         amount = float(update.message.text)
         user_id = str(update.effective_user.id)
         net_amount = round(amount * 0.90, 2)
+        tx_id=str(uuid.uuid4())[:8]
         
 
         if amount <= 0:
@@ -990,20 +980,20 @@ async def deposit_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Minimum deposit is 100 USDT.")
             return DEPOSIT_AMOUNT
 
-        import uuid
+    
            # Store pending deposit
         context.user_data['deposit_data'] = {
                 'gross_amount': amount,
                 'net_amount': net_amount,
                 'user_id': user_id,
-                'tx_id': str(uuid.uuid4())[:8],  # Generate a unique transaction ID
+                'tx_id': tx_id,  
             }
 
         tx_logger.log_trade(
             user_id=user_id,
             tx_type="DEPOSIT",
             amount=amount,
-            tx_id=str(uuid.uuid4())[:8],
+            tx_id=tx_id,
             notes=f"Pending deposit from user {user_id}"
         )
 
@@ -1181,6 +1171,8 @@ async def withdraw_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['withdraw_amount'] = amount
         context.user_data['withdraw_net_amount'] = net_amount
 
+
+
         await update.message.reply_text(
             f"✅ Withdrawal request accepted.\n"
             f"You will receive {net_amount} USDT after a 10% fee.\n\n"
@@ -1197,18 +1189,28 @@ async def withdraw_address(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     amount = context.user_data.get('withdraw_amount')
     net_amount = amount * 0.90
+    tx_id=str(uuid.uuid4())[:8]
 
     if not amount:
         await update.message.reply_text("❌ Withdrawal process error. Please start over.")
         return ConversationHandler.END
     
+ 
+    tx_logger.log_trade(
+        user_id=user_id,
+        tx_type="WITHDRAW",
+        tx_id=tx_id,
+        amount=amount,
+        address=address,
+        notes=f"Pending withdraw from user {user_id}"
+    )
 
     # Store withdrawal request
     context.user_data['withdraw_address'] = address
     
     # Notify admin for approval
     for admin_id in ADMIN_IDS:
-        await notify_admin_withdrawal(context, admin_id, user_id, amount, address)
+        await notify_admin_withdrawal(context, admin_id, user_id, amount, address,tx_id)
     
     await update.message.reply_text(
         f"⌛ Your withdrawal request of {amount:.2f} USDT (you'll receive {net_amount:.2f} USDT after fees) "

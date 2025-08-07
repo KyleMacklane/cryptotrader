@@ -16,7 +16,7 @@ class TransactionLogger:
         self.csv_file = csv_file
         self.fieldnames = [
             "timestamp", "user_id", "tx_id", "tx_type", "amount", 
-            "status", "related_user", "notes"
+            "status","address", "related_user", "notes"
         ]
         self.ensure_csv_has_header()
     
@@ -36,7 +36,7 @@ class TransactionLogger:
                 logger.warning("⚠️ Header was missing in CSV. Header has been inserted.")
 
 
-    def log_trade(self, user_id: str, tx_type: str, amount: float, status="PENDING",
+    def log_trade(self, user_id: str, tx_type: str, amount: float, status="PENDING",address:str=None,
                   related_user: str = "", notes: str = "",tx_id: str = None) -> str:
         """Log a trade transaction and return tx_id"""
         if tx_id is None:
@@ -52,11 +52,11 @@ class TransactionLogger:
             writer.writerow({
                 "timestamp": datetime.utcnow().isoformat(),
                 "user_id": user_id,
-                "tx_id": str(uuid.uuid4()),
+                "tx_id": tx_id,
                 "tx_type": tx_type.upper(),
                 "amount": f"{amount:.2f}",
                 "status": status,
-                
+                "address": address,
                 "related_user": related_user,
                 "notes": notes
             })
@@ -153,7 +153,7 @@ class TransactionLogger:
                 user_txns['timestamp'] = pd.to_datetime(user_txns['timestamp'], errors='coerce')
                 user_txns['timestamp'] = user_txns['timestamp'].dt.strftime('%Y-%m-%d %H:%M:%S')
 
-            return user_txns[['timestamp', 'tx_type', 'amount', 'status']].sort_values('timestamp', ascending=False).head(limit)
+            return user_txns[['timestamp', 'tx_type', 'amount', 'status','address']].sort_values('timestamp', ascending=False).head(limit)
 
         except Exception as e:
             logger.error(f"Error reading transactions: {e}")
