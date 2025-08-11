@@ -118,6 +118,10 @@ def main_menu_keyboard():
             InlineKeyboardButton("📈 Trading Stats", callback_data='tradingstats')
         ],
         [
+            InlineKeyboardButton("🔗 Referral", callback_data='referral'),
+            
+        ],
+        [
             InlineKeyboardButton("🔄 Refresh", callback_data='main_menu')
         ]
     ])
@@ -452,6 +456,8 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await start_withdraw_flow(query, context)
     elif query.data == 'support':
         await show_help(query, context)
+    elif query.data == 'referral':
+        await referral_command(update, context)    
     elif query.data == 'admin_edit_balance':
         return await list_all_users(query, context)  
     elif query.data == 'history':
@@ -1383,7 +1389,17 @@ async def reconcile_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def referral_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
+    if hasattr(update, 'callback_query') and update.callback_query:
+        # Handle callback query case
+        user_id = update.callback_query.from_user.id
+        message = update.callback_query.message
+        is_callback = True
+    else:
+        # Handle regular message case
+        user_id = update.effective_user.id
+        message = update.message
+        is_callback = False
+
     ref_info = account_manager.get_referral_info(user_id)
     
     if not ref_info:
@@ -1401,13 +1417,23 @@ async def referral_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"👤 Referrals: {referral_count}\n"
         f"💰 Earnings: {referral_earnings} USDT\n\n"
         f"Share your link: https://t\\.me/{bot_username}?start\\=ref\\_{referral_id}\n\n"
-        "_Earn 2% of your referrals' first deposit_"
+        "_Earn 2% of your referrals' deposits_"
     )
-    await update.message.reply_text(
-        message,
-        parse_mode='MarkdownV2',
-        reply_markup=main_menu_keyboard()
-    )
+
+    if update.callback_query:
+        await update.callback_query.answer()
+        await update.callback_query.edit_message_text(
+            message,
+            parse_mode='MarkdownV2',
+            reply_markup=main_menu_keyboard()
+        )
+
+    else:   
+        await update.message.reply_text(
+            message,
+            parse_mode='MarkdownV2',
+            reply_markup=main_menu_keyboard()
+        )
 
 async def handle_referral_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
