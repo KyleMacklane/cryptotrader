@@ -10,6 +10,8 @@ from mt5.mt5service import MT5Service
 import json
 from mt5.EACommunicator_API import EACommunicator_API
 
+import uuid
+
 
 
 logger = logging.getLogger(__name__)
@@ -64,7 +66,16 @@ class AccountManager:
 
     def add_user_if_not_exists(self, telegram_id, server, user_id,referral_id=None):
         accounts = self._load_accounts()
-        if any(acc["telegram_id"] == str(telegram_id) for acc in accounts):
+        # Check if user exists first
+        existing_account = next((acc for acc in accounts if acc["telegram_id"] == str(telegram_id)), None)
+        if existing_account:
+            # If account exists but has no referrer, and referral_id is provided
+            if not existing_account.get("referrer_id") and referral_id:
+                referrer_telegram_id = self._get_telegram_id_from_referral_id(referral_id)
+                if referrer_telegram_id:
+                    existing_account["referrer_id"] = referrer_telegram_id
+                    self._add_referral(referrer_telegram_id)
+                    self._save_accounts(accounts)
             return
         
         #create a new account
@@ -83,7 +94,7 @@ class AccountManager:
             "total_deposits": "0.00",
             "last_interest_date": datetime.now().strftime("%Y-%m-%d"),
             "total_interest": "0.00",
-            "referrer_id": referral_id or "",
+            "referrer_id": "",
             "locked": "0.00",
             "mt5_allocation": "0.00",
             "last_profit_date": "",
@@ -97,10 +108,13 @@ class AccountManager:
             referrer_telegram_id = self._get_telegram_id_from_referral_id(referral_id)
             if referrer_telegram_id:
                 new_account["referrer_id"] = referrer_telegram_id
-                self._add_referral(referrer_telegram_id)
+                
         
         accounts.append(new_account)
         self._save_accounts(accounts)
+
+        if referral_id and referrer_telegram_id:
+            self._add_referral(referrer_telegram_id)
 
     def get_floating_pl(self):
         """Get current floating P/L from open positions"""
@@ -275,18 +289,23 @@ class AccountManager:
             return self._save_accounts(accounts)
         return False
 
+
     def _generate_referral_id(self, telegram_id):
-            return "REF" + str(telegram_id)[-6:] + datetime.now().strftime("%m%d")    
+        # Last 4 digits of Telegram ID + short random code
+        random_part = uuid.uuid4().hex[:6].upper()  # 6-char random
+        return f"REF{str(telegram_id)[-4:]}{random_part}"
 
     def _get_telegram_id_from_referral_id(self, referral_id: str) -> str:
-        accounts = self._load_accounts()
-        for acc in accounts:
-            if acc.get("referral_id") == referral_id:
+        referral_id = referral_id.strip().upper()
+        for acc in self._load_accounts():
+            if acc.get("referral_id", "").upper() == referral_id:
                 return acc["telegram_id"]
         return None
 
 
+
     def _add_referral(self, referrer_id):
+        logger.info(f"Adding referral for {referrer_id}")
         accounts = self._load_accounts()
         for acc in accounts:
             if acc["telegram_id"] == str(referrer_id):
@@ -295,26 +314,20 @@ class AccountManager:
                 acc["referrals"] = str(current_refs + 1)
                 
                 # Mark if first referral
-                if current_refs == 0:
-                    acc["first_referral"] = "1"
+                # if current_refs == 0:
+                #     acc["first_referral"] = "1"
                 
-                self._save_accounts(accounts)
-                return True
+                
+                return self._save_accounts(accounts)
         return False
 
     def add_referral_earning(self, referrer_id, amount):
         accounts = self._load_accounts()
         for acc in accounts:
             if acc["telegram_id"] == str(referrer_id):
-                # Calculate 10% bonus
-                bonus = amount * 0.10
-                tx_logger.log_trade(
-                    user_id=str(referrer_id),
-                    tx_type="REFERRAL",
-                    amount=bonus,
-                    related_user=str(referrer_id),
-                    notes=f"Bonus from referral deposit"
-                )
+                # Calculate 2% bonus
+                bonus = amount * 0.02
+
                 # Update referral earnings
                 current_earnings = float(acc.get("referral_earnings", "0"))
                 acc["referral_earnings"] = str(round(current_earnings + bonus, 2))
@@ -322,8 +335,16 @@ class AccountManager:
                 current_balance = float(acc.get("balance", "0"))
                 acc["balance"] = str(round(current_balance + bonus, 2))
                 
-                self._save_accounts(accounts)
-                return True
+                tx_logger.log_trade(
+                    user_id=str(referrer_id),
+                    tx_type="REFERRAL",
+                    amount=bonus,
+                    status="COMPLETED",
+                    related_user=str(referrer_id),
+                    notes=f"Bonus from approved referral deposit"
+                )
+
+                return self._save_accounts(accounts)
         return False
     
 

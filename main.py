@@ -55,12 +55,12 @@ logger = logging.getLogger(__name__)
 # Constants
 TOKEN ='7759076862:AAHPJrG22OFySb3cGhrPkNM8I7lfwxvm8Rk'
 # TOKEN = '7603656998:AAHYKMQN9UQLfZ9Dm_Z7759076862:AAHPJrG22OFySb3cGhrPkNM8I7lfwxvm8Rk3RxgSyIMgZvQdNes'
-BOT_USERNAME: Final = os.getenv('BOT_USERNAME')
+BOT_USERNAME: Final = 'FFUCryptBot'
 COMMUNITY_LINK = "https://t.me/Unclesbotsupport"
 ADMIN_IDS = [5079683472]  
 DEPOSIT_AMOUNT, WITHDRAW_AMOUNT, WITHDRAW_ADDRESS, TXN_PROOF = range(4)
 EDIT_USER_BALANCE = range(1)
-REFERRAL_BONUS_PERCENT=10
+REFERRAL_BONUS_PERCENT=2
 PROFIT_FEE_RATE = 0.10 
 MAX_WITHDRAWALS_PER_MONTH = 1
 WITHDRAWAL_COOLDOWN = timedelta(days=30)
@@ -688,7 +688,7 @@ async def process_new_balance(update: Update, context: ContextTypes.DEFAULT_TYPE
             admin_id = update.effective_user.id
             tx_logger.log_trade(
                 user_id=user_id,
-                tx_type="ADMIN_BALANCE_EDIT",
+                tx_type="UPDATE",
                 amount=new_balance,
                 notes=f"Edited by admin {admin_id}"
             )
@@ -819,8 +819,24 @@ async def handle_admin_verification(update: Update, context: ContextTypes.DEFAUL
                     if not account_manager.process_deposit(user_id, gross_amount):  # Store net amount after fee
                         await query.edit_message_text("❌ Failed to process deposit")
                         return
+                    
+                    account = account_manager.get_account_info(user_id)
+                    # if account and account.get("first_deposit") == "1":  # Just became first deposit
+                    referrer_id = account.get("referrer_id")
+                    if referrer_id:
+                            # Calculate and add referral bonus
+                          
+                            account_manager.add_referral_earning(referrer_id, gross_amount)
+                             # Notify referrer
+                            try:
+                                await context.bot.send_message(
+                                    chat_id=referrer_id,
+                                    text=f"🎉 You earned {gross_amount*0.02:.2f} USDT referral bonus!"
+                                )
+                            except Exception as e:
+                                logger.error(f"Failed to notify referrer: {e}")
 
-                                            # Log transaction
+                     # Log transaction
                     tx_logger.update_status(
                                 tx_id=tx_id,
                                 status="COMPLETED",
@@ -1008,17 +1024,17 @@ async def deposit_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode='Markdown'
         )
 
-          # Apply referral bonus if first deposit
-        account = account_manager.get_account_info(user_id)
-        if account and account.get("first_deposit") == "0":
-            # Apply referral bonus
-            referrer_id = account.get("referrer_id")
-            if referrer_id:
-                account_manager.add_referral_earning(referrer_id, amount)
+        #   # Apply referral bonus if first deposit
+        # account = account_manager.get_account_info(user_id)
+        # if account and account.get("first_deposit") == "0":
+        #     # Apply referral bonus
+        #     referrer_id = account.get("referrer_id")
+        #     if referrer_id:
+        #         account_manager.add_referral_earning(referrer_id, amount)
         
             # Mark first deposit
-            accounts = account_manager._load_accounts()
-            for acc in accounts:
+        accounts = account_manager._load_accounts()
+        for acc in accounts:
                 if acc["telegram_id"] == str(user_id):
                  acc["first_deposit"] = "1"
                  acc["first_deposit_date"] = datetime.now().strftime("%Y-%m-%d")
@@ -1385,7 +1401,7 @@ async def referral_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"👤 Referrals: {referral_count}\n"
         f"💰 Earnings: {referral_earnings} USDT\n\n"
         f"Share your link: https://t\\.me/{bot_username}?start\\=ref\\_{referral_id}\n\n"
-        "_Earn 10% of your referrals' first deposit_"
+        "_Earn 2% of your referrals' first deposit_"
     )
     await update.message.reply_text(
         message,
@@ -1396,27 +1412,31 @@ async def referral_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_referral_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     ref_id = None
-    
-    # Extract referral ID from deep link
-    if context.args and context.args[0].startswith('ref_'):
-        ref_id = context.args[0][4:]
-    
-    # Create account with referral if applicable
-    account_manager.add_user_if_not_exists(user.id, "main", str(user.id), ref_id)
 
-        # Send welcome message
-    await start(update, context)
-    
-    # Notify referrer
+    # Extract referral ID from deep link (full match to what's stored in CSV)
+    if context.args and context.args[0].startswith('ref_'):
+        ref_id = context.args[0][4:].strip()  # remove "ref_" and spaces
+
+    # Prevent self-referrals
     if ref_id:
-        for account in account_manager._load_accounts():
-            if account.get("referral_id") == ref_id:
-                referrer_id = account["telegram_id"]
-                await context.bot.send_message(
-                    chat_id=referrer_id,
-                    text=f"🎉 New referral! @{user.username} joined using your link"
-                )
-                break
+        referrer_telegram_id = account_manager._get_telegram_id_from_referral_id(ref_id)
+        if referrer_telegram_id == str(user.id):
+            ref_id = None  # ignore if user tries their own link
+
+    # Create account with referral 
+    account_manager.add_user_if_not_exists(user.id, "main", str(user.id), referral_id=ref_id)
+
+    # Send welcome/start message
+    await start(update, context)
+
+    # Notify referrer 
+    if ref_id:
+        referrer_telegram_id = account_manager._get_telegram_id_from_referral_id(ref_id)
+        if referrer_telegram_id:
+            await context.bot.send_message(
+                chat_id=referrer_telegram_id,
+                text=f"🎉 New referral! @{user.username or 'A user'} joined using your link"
+            )
 
 async def show_wallets(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = (
