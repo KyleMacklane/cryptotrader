@@ -802,6 +802,10 @@ async def handle_admin_verification(update: Update, context: ContextTypes.DEFAUL
             logger.warning(f"Unauthorized admin attempt by {query.from_user.id}")
             await query.edit_message_text("❌ Admin privileges required")
             return
+            # Check if already processed (using message caption as indicator)
+        if "✅ Verified" in query.message.caption or "❌ Rejected" in query.message.caption:
+            await query.answer("⏳ This transaction was already processed", show_alert=True)
+            return
 
         # Parse callback data with proper type conversion
         parts = query.data.split('_')
@@ -811,6 +815,12 @@ async def handle_admin_verification(update: Update, context: ContextTypes.DEFAUL
         amount = float(parts[3])
         tx_id = str(parts[4]) if len(parts) > 4 else "UNKNOWN"
         user = await context.bot.get_chat(user_id)
+
+        # Immediately disable the buttons to prevent duplicate clicks
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except:
+            pass  # Fail silently if edit fails
 
         logger.info(f"Processing {action} for {request_type} of {amount} by user {user_id}")
 
@@ -851,10 +861,18 @@ async def handle_admin_verification(update: Update, context: ContextTypes.DEFAUL
 
 
                     # Notify admin
-                    await query.edit_message_caption(
-                        caption=f"✅ Verified deposit of {gross_amount} USDT (credited {net_amount:.2f} after fee) for user{user.username if user.username else user.full_name} ",
-                        reply_markup=InlineKeyboardMarkup([])  
+                    try:
+                        await query.edit_message_caption(
+                            caption=f"✅ Verified deposit of {gross_amount} USDT (credited {net_amount:.2f} after fee) for user{user.username if user.username else user.full_name} ",
+                            reply_markup=InlineKeyboardMarkup([])  
+                            )
+                    except Exception as e:
+                        logger.error(f"Failed to edit message caption: {e}")
+                        await query.edit_message_text(
+                            text=f"✅ Verified deposit of {gross_amount} USDT (credited {net_amount:.2f} after fee) for user @{user.username if user.username else user.full_name}",
+                            reply_markup=InlineKeyboardMarkup([])
                         )
+                        return    
                     # Notify user
                     await context.bot.send_message(
                         chat_id=user_id,
