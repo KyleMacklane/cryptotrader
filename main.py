@@ -1457,6 +1457,7 @@ async def handle_referral_start(update: Update, context: ContextTypes.DEFAULT_TY
     user = update.effective_user
     ref_id = None
 
+    
     # Extract referral ID from deep link (full match to what's stored in CSV)
     if context.args and context.args[0].startswith('ref_'):
         ref_id = context.args[0][4:].strip()  # remove "ref_" and spaces
@@ -1468,19 +1469,21 @@ async def handle_referral_start(update: Update, context: ContextTypes.DEFAULT_TY
             ref_id = None  # ignore if user tries their own link
 
     # Create account with referral 
-    account_manager.add_user_if_not_exists(user.id, "main", str(user.id), referral_id=ref_id)
+    success, referrer_telegram_id = account_manager.add_user_if_not_exists(user.id, "main", str(user.id), referral_id=ref_id)
 
     # Send welcome/start message
     await start(update, context)
 
     # Notify referrer 
-    if ref_id:
-        referrer_telegram_id = account_manager._get_telegram_id_from_referral_id(ref_id)
-        if referrer_telegram_id:
+    if success and referrer_telegram_id:
+        try:
             await context.bot.send_message(
                 chat_id=referrer_telegram_id,
                 text=f"🎉 New referral! @{user.username or 'A user'} joined using your link"
             )
+        except Exception as e:
+            logger.error(f"Failed to notify referrer {referrer_telegram_id}: {e}")
+                
 
 async def show_wallets(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = (

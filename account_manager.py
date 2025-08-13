@@ -65,56 +65,62 @@ class AccountManager:
         return None
 
     def add_user_if_not_exists(self, telegram_id, server, user_id,referral_id=None):
-        accounts = self._load_accounts()
-        # Check if user exists first
-        existing_account = next((acc for acc in accounts if acc["telegram_id"] == str(telegram_id)), None)
-        if existing_account:
-            # If account exists but has no referrer, and referral_id is provided
-            if not existing_account.get("referrer_id") and referral_id:
+       
+        with self.lock:
+        
+            accounts = self._load_accounts()
+            # Check if user exists first
+            existing_account = next((acc for acc in accounts if acc["telegram_id"] == str(telegram_id)), None)
+            if existing_account:
+                # If account exists but has no referrer, and referral_id is provided
+                if not existing_account.get("referrer_id") and referral_id:
+                    referrer_telegram_id = self._get_telegram_id_from_referral_id(referral_id)
+                    if referrer_telegram_id:
+                        existing_account["referrer_id"] = referrer_telegram_id
+                        if not self._add_referral(referrer_telegram_id, accounts):
+                            logger.error(f"Failed to add referral count for {referrer_telegram_id}")
+                            return False
+                        return self._save_accounts(accounts)
+                return True
+            
+            #create a new account
+            new_account = {
+                "telegram_id": str(telegram_id),
+                "server": server,
+                "user_id": user_id,
+                "balance": "0.00",
+                "total_withdrawals": "0.00",
+                "referral_id": self._generate_referral_id(telegram_id),
+                "referrals": "0",
+                "referral_earnings": "0.00",
+                "first_deposit": "0",
+                "first_deposit_date": "",
+                "first_deposit_amount": "0.00",
+                "total_deposits": "0.00",
+                "last_interest_date": datetime.now().strftime("%Y-%m-%d"),
+                "total_interest": "0.00",
+                "referrer_id": "",
+                "locked": "0.00",
+                "mt5_allocation": "0.00",
+                "last_profit_date": "",
+                "profit_share_rate": "0.15",
+                "last_profit_share": ""
+            }
+        
+            # Add referrer if provided
+            if referral_id:
+                # Convert referral_id to Telegram ID
+            
                 referrer_telegram_id = self._get_telegram_id_from_referral_id(referral_id)
                 if referrer_telegram_id:
-                    existing_account["referrer_id"] = referrer_telegram_id
-                    self._add_referral(referrer_telegram_id)
-                    self._save_accounts(accounts)
-            return
-        
-        #create a new account
-        new_account = {
-            "telegram_id": str(telegram_id),
-            "server": server,
-            "user_id": user_id,
-            "balance": "0.00",
-            "total_withdrawals": "0.00",
-            "referral_id": self._generate_referral_id(telegram_id),
-            "referrals": "0",
-            "referral_earnings": "0.00",
-            "first_deposit": "0",
-            "first_deposit_date": "",
-            "first_deposit_amount": "0.00",
-            "total_deposits": "0.00",
-            "last_interest_date": datetime.now().strftime("%Y-%m-%d"),
-            "total_interest": "0.00",
-            "referrer_id": "",
-            "locked": "0.00",
-            "mt5_allocation": "0.00",
-            "last_profit_date": "",
-            "profit_share_rate": "0.15",
-            "last_profit_share": ""
-        }
-     
-        # Add referrer if provided
-        if referral_id:
-    # Convert referral_id to Telegram ID
-            referrer_telegram_id = self._get_telegram_id_from_referral_id(referral_id)
-            if referrer_telegram_id:
-                new_account["referrer_id"] = referrer_telegram_id
-                
-        
-        accounts.append(new_account)
-        self._save_accounts(accounts)
-
-        if referral_id and referrer_telegram_id:
-            self._add_referral(referrer_telegram_id)
+                    new_account["referrer_id"] = referrer_telegram_id
+                    if not self._add_referral(referrer_telegram_id, accounts):
+                        logger.error(f"Failed to add referral count for {referrer_telegram_id}")
+                        return False
+                    
+            
+            accounts.append(new_account)
+            return (self._save_accounts(accounts), referrer_telegram_id)
 
     def get_floating_pl(self):
         """Get current floating P/L from open positions"""
@@ -298,28 +304,50 @@ class AccountManager:
     def _get_telegram_id_from_referral_id(self, referral_id: str) -> str:
         referral_id = referral_id.strip().upper()
         for acc in self._load_accounts():
-            if acc.get("referral_id", "").upper() == referral_id:
+            if acc.get("referral_id", "").strip().upper() == referral_id:
                 return acc["telegram_id"]
         return None
 
 
 
-    def _add_referral(self, referrer_id):
+    def _add_referral(self, referrer_id, accounts=None):
+        """Add referral count to referrer's account"""
         logger.info(f"Adding referral for {referrer_id}")
+        try:
+            # Use passed accounts or load fresh copy
+            accounts_to_update = accounts if accounts is not None else self._load_accounts()
+            
+            for acc in accounts_to_update:
+                if acc["telegram_id"] == str(referrer_id):
+                    current_refs = int(acc.get("referrals", "0"))
+                    acc["referrals"] = str(current_refs + 1)
+                    
+                    # Only save if we loaded accounts ourselves
+                    if accounts is None:
+                        return self._save_accounts(accounts_to_update)
+                    return True
+                    
+            return False
+        except Exception as e:
+            logger.error(f"Error adding referral: {e}")
+            return False
+        
+    def verify_referral_consistency(self):
+        """Check for accounts where referrer_id is set but referral count wasn't incremented"""
         accounts = self._load_accounts()
+        inconsistencies = []
+        
         for acc in accounts:
-            if acc["telegram_id"] == str(referrer_id):
-                # Update referral count
-                current_refs = int(acc.get("referrals", "0"))
-                acc["referrals"] = str(current_refs + 1)
-                
-                # Mark if first referral
-                # if current_refs == 0:
-                #     acc["first_referral"] = "1"
-                
-                
-                return self._save_accounts(accounts)
-        return False
+            if acc.get("referrer_id"):
+                referrer = next((a for a in accounts if a["telegram_id"] == acc["referrer_id"]), None)
+                if referrer and str(acc["telegram_id"]) not in referrer.get("referral_details", ""):
+                    inconsistencies.append({
+                        "user": acc["telegram_id"],
+                        "referrer": acc["referrer_id"],
+                        "referral_count": referrer.get("referrals", "0")
+                    })
+        
+        return inconsistencies    
 
     def add_referral_earning(self, referrer_id, amount):
         accounts = self._load_accounts()

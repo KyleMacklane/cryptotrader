@@ -81,7 +81,8 @@ class EACommunicator_API:
     def Get_all_closed_positions(self) -> pd.DataFrame:
         """Retrieves all closed positions/orders."""
         csvReply = self.send_command(TradingCommands.GET_CLOSED_POSITIONS)
-        print("RAW RESPONSE FROM EA:", csvReply)
+        print("response gotten")
+        # print("RAW RESPONSE FROM EA:", csvReply)
         df = self.readCsv(csvReply)
 
         if df is not None and not df.empty:
