@@ -65,23 +65,29 @@ class AccountManager:
         return None
 
     def add_user_if_not_exists(self, telegram_id, server, user_id,referral_id=None):
-       
+        """
+            Returns:
+                tuple: (success: bool, referrer_id: str or None, is_new_user: bool)
+        """
         with self.lock:
         
             accounts = self._load_accounts()
+            is_new_user = False
+            referrer_telegram_id = None
+
             # Check if user exists first
             existing_account = next((acc for acc in accounts if acc["telegram_id"] == str(telegram_id)), None)
             if existing_account:
                 # If account exists but has no referrer, and referral_id is provided
                 if not existing_account.get("referrer_id") and referral_id:
                     referrer_telegram_id = self._get_telegram_id_from_referral_id(referral_id)
+                   
                     if referrer_telegram_id:
                         existing_account["referrer_id"] = referrer_telegram_id
                         if not self._add_referral(referrer_telegram_id, accounts):
                             logger.error(f"Failed to add referral count for {referrer_telegram_id}")
-                            return False
-                        return self._save_accounts(accounts)
-                return True
+                            return (False, None, False)
+                return (self._save_accounts(accounts), referrer_telegram_id, False)
             
             #create a new account
             new_account = {
@@ -106,6 +112,7 @@ class AccountManager:
                 "profit_share_rate": "0.15",
                 "last_profit_share": ""
             }
+            is_new_user = True
         
             # Add referrer if provided
             if referral_id:
@@ -116,11 +123,11 @@ class AccountManager:
                     new_account["referrer_id"] = referrer_telegram_id
                     if not self._add_referral(referrer_telegram_id, accounts):
                         logger.error(f"Failed to add referral count for {referrer_telegram_id}")
-                        return False
+                        return (False, None, False)
                     
             
             accounts.append(new_account)
-            return (self._save_accounts(accounts), referrer_telegram_id)
+            return (self._save_accounts(accounts), referrer_telegram_id, is_new_user)
 
     def get_floating_pl(self):
         """Get current floating P/L from open positions"""

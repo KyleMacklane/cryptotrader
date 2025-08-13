@@ -1469,13 +1469,18 @@ async def handle_referral_start(update: Update, context: ContextTypes.DEFAULT_TY
             ref_id = None  # ignore if user tries their own link
 
     # Create account with referral 
-    success, referrer_telegram_id = account_manager.add_user_if_not_exists(user.id, "main", str(user.id), referral_id=ref_id)
+    success, referrer_telegram_id, is_new_user = account_manager.add_user_if_not_exists(
+        user.id,
+        "main",
+        str(user.id),
+        referral_id=ref_id
+        )
 
     # Send welcome/start message
     await start(update, context)
 
     # Notify referrer 
-    if success and referrer_telegram_id:
+    if success and is_new_user and referrer_telegram_id:
         try:
             await context.bot.send_message(
                 chat_id=referrer_telegram_id,
