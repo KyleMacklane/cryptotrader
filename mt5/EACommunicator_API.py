@@ -5,6 +5,7 @@ import zmq
 import pandas as pd
 from datetime import datetime, timedelta, time
 from io import StringIO
+import os
 
 class TradingCommands(Enum):
     GET_OPEN_POSITIONS = 9
@@ -81,6 +82,7 @@ class EACommunicator_API:
     def Get_all_closed_positions(self) -> pd.DataFrame:
         """Retrieves all closed positions/orders."""
         csvReply = self.send_command(TradingCommands.GET_CLOSED_POSITIONS)
+
         print("response gotten")
         # print("RAW RESPONSE FROM EA:", csvReply)
         df = self.readCsv(csvReply)
@@ -99,10 +101,69 @@ class EACommunicator_API:
             df = df[df['closetime'].notna()]  # Keep only rows with actual close times
                 
             print(f"Found {len(df)} truly closed positions")
+
+            self._append_to_trades_log(df)
+
             return df
         
         return pd.DataFrame()  # Return empty DataFrame if no data
 
+    def _append_to_trades_log(self, df: pd.DataFrame):
+        """Append new trades to the trades_log.csv file, avoiding duplicates."""
+        try:
+            csv_file = "trades_log.csv"
+            
+            # Check if file exists and is not empty
+            file_exists = os.path.exists(csv_file) and os.path.getsize(csv_file) > 0
+            
+            existing_trade_ids = set()
+            
+            if file_exists:
+                try:
+                    # Read existing data - use first column as ticket IDs
+                    existing_df = pd.read_csv(csv_file)
+                    if not existing_df.empty:
+                        # Get the first column (ticket IDs)
+                        ticket_column = existing_df.columns[0]
+                        existing_trade_ids = set(existing_df[ticket_column].astype(str))
+                        print(f"📋 Found {len(existing_trade_ids)} existing trades in log")
+                    else:
+                        print("⚠️ Existing trades file is empty")
+                        file_exists = False
+                except pd.errors.EmptyDataError:
+                    print("⚠️ Trades file is empty - creating new file")
+                    file_exists = False
+                except Exception as e:
+                    print(f"⚠️ Could not read existing trades file: {e}")
+                    file_exists = False
+            
+            # Get the first column from incoming data (should be ticket IDs)
+            if len(df.columns) > 0:
+                ticket_column_name = df.columns[0]
+                print(f"🎫 Using '{ticket_column_name}' as ticket identifier")
+                
+                # Filter out trades that already exist in the file
+                if existing_trade_ids:
+                    new_trades = df[~df[ticket_column_name].astype(str).isin(existing_trade_ids)]
+                else:
+                    new_trades = df
+                
+                if not new_trades.empty:
+                    # Append to CSV (create file if it doesn't exist)
+                    mode = 'a' if file_exists else 'w'
+                    header = not file_exists  # Write header only if creating new file
+                    
+                    new_trades.to_csv(csv_file, mode=mode, header=header, index=False)
+                    print(f"✅ Appended {len(new_trades)} new trades to {csv_file}")
+                else:
+                    print("ℹ️ No new trades to append to log file")
+            else:
+                print("❌ No columns in incoming data")
+                
+        except Exception as e:
+            print(f"❌ Error writing to trades log: {e}")
+            import traceback
+            traceback.print_exc()
 
     def Get_closed_pl_today(self, timezone_offset: int = 3) -> float:
         """

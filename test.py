@@ -1,4 +1,4 @@
-my main file, how can i update it import os
+import os
 from typing import Final
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
