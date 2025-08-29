@@ -56,7 +56,8 @@ logger = logging.getLogger(__name__)
 TOKEN ='7759076862:AAHPJrG22OFySb3cGhrPkNM8I7lfwxvm8Rk'
 # TOKEN = '7603656998:AAHYKMQN9UQLfZ9Dm_Z7759076862:AAHPJrG22OFySb3cGhrPkNM8I7lfwxvm8Rk3RxgSyIMgZvQdNes'
 BOT_USERNAME: Final = 'FFUCryptBot'
-COMMUNITY_LINK = "https://t.me/Unclesbotsupport"
+COMMUNITY_LINK = "https://t.me/unclehardbotgroup"
+
 ADMIN_IDS = [5079683472]  
 DEPOSIT_AMOUNT, WITHDRAW_AMOUNT, WITHDRAW_ADDRESS, TXN_PROOF = range(4)
 EDIT_USER_BALANCE = range(1)
@@ -119,6 +120,7 @@ def main_menu_keyboard():
         ],
         [
             InlineKeyboardButton("🔗 Referral", callback_data='referral'),
+            InlineKeyboardButton("Join Community", url=COMMUNITY_LINK)
             
         ],
         [
