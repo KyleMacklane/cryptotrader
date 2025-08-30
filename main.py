@@ -1469,6 +1469,9 @@ async def withdraw_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "Please contact support to verify your balance."
                 )
             return WITHDRAW_AMOUNT
+        
+ 
+
 
         # if not check_roi_status(user_id):
         #     principal_remaining = max(0, total_deposits - total_profits)
@@ -1488,15 +1491,22 @@ async def withdraw_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['withdraw_amount'] = amount
         context.user_data['withdraw_net_amount'] = net_amount
 
+        if total_profits >=50 and current_balance > 0:
 
-
-        await update.message.reply_text(
-            f"✅ Withdrawal request accepted.\n"
-            f"You will receive {net_amount} USDT after a 10% fee.\n\n"
-            "Now, enter your USDT wallet address:"
-        )
-        return WITHDRAW_ADDRESS
-    
+            await update.message.reply_text(
+                f"✅ Withdrawal request accepted.\n"
+                f"You will receive {net_amount} USDT after a 10% fee.\n\n"
+                "Now, enter your USDT wallet address:"
+            )
+            return WITHDRAW_ADDRESS
+        else:
+            await update.message.reply_text(
+                "❌ Minimum profit of 50 USDT required before withdrawals.\n"
+                f"• Current Profits: {total_profits:.2f} USDT\n"
+                "Please continue trading to earn profits."
+            )
+            return ConversationHandler.END  
+          
     except ValueError:
         await update.message.reply_text("❌ Please enter a valid number.")
         return WITHDRAW_AMOUNT
