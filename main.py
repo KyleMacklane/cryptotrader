@@ -1421,20 +1421,18 @@ async def withdraw_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         amount = float(update.message.text)
         user_id = str(update.effective_user.id)
-        balance = account_manager.get_balance(user_id)  
 
-
-              # Check minimum withdrawal
-        # if amount < MIN_WITHDRAWAL:
-        #     await update.message.reply_text(f"❌ Minimum withdrawal is {MIN_WITHDRAWAL} USDT.")
-        #     return WITHDRAW_AMOUNT
-        
-        # Check account balance
-        balance = account_manager.get_balance(user_id)
-        if amount > balance:
-            await update.message.reply_text("❌ Insufficient balance.")
+        # --- Check account existence ---
+        account_info = account_manager.get_account_info(user_id)
+        if not account_info:
+            await update.message.reply_text("❌ Account not found")
             return WITHDRAW_AMOUNT
-        
+
+        current_balance = float(account_info.get("balance", 0))
+        total_deposits = float(account_info.get("total_deposits", 0))
+        total_profits = float(account_info.get("total_interest", 0))
+
+        # --- Basic validations ---
         if amount <= 0:
             await update.message.reply_text("❌ Amount must be positive")
             return WITHDRAW_AMOUNT
@@ -1442,71 +1440,60 @@ async def withdraw_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if amount < 10:
             await update.message.reply_text("❌ Minimum withdrawal is 10 USDT.")
             return WITHDRAW_AMOUNT
-        
-          # Check withdrawal limits
+
+        if amount > current_balance:
+            await update.message.reply_text("❌ Insufficient balance.")
+            return WITHDRAW_AMOUNT
+
+        # --- Withdrawal cooldown check ---
         if not withdrawal_tracker.can_withdraw(user_id):
             next_withdrawal = (datetime.now() + WITHDRAWAL_COOLDOWN).strftime("%Y-%m-%d")
             await update.message.reply_text(
-                f"❌ You've reached your monthly withdrawal limit.\n"
+                f"❌ Monthly withdrawal limit reached.\n"
                 f"Next available withdrawal: {next_withdrawal}"
             )
             return ConversationHandler.END
-        
-         # Check if withdrawing profits only
-        account_info = account_manager.get_account_info(user_id)
-        if not account_info:
-            await update.message.reply_text("❌ Account not found")
-            return ConversationHandler
-        
-        total_deposits = float(account_info.get("total_deposits", 0))
-        total_profits = float(account_info.get("total_interest", 0))
-        current_balance = float(account_info["balance"])
-    
 
+        # --- Check for anomaly: balance but no deposits ---
         if total_deposits == 0 and current_balance > 0:
             await update.message.reply_text(
-                    "❌ Withdrawal blocked: Account anomality detected.\n"
-                    "Please contact support to verify your balance."
-                )
+                "❌ Withdrawal blocked: Account anomaly detected.\n"
+                "Please contact support to verify your balance."
+            )
             return WITHDRAW_AMOUNT
-        
- 
 
+        # --- Profit-only withdrawal logic ---
+        principal_remaining = max(0, total_deposits - total_profits)
+        available_profits = max(0, current_balance - principal_remaining)
 
-        # if not check_roi_status(user_id):
-        #     principal_remaining = max(0, total_deposits - total_profits)
-        #     available_to_withdraw = max(0, current_balance - principal_remaining)
-            
-        #     if amount > available_to_withdraw:
-        #         await update.message.reply_text(
-        #             f"❌ Can only withdraw {available_to_withdraw:.2f} USDT (profits) but you haven't achieved your ROI \n"
-        #             f"• Deposited: {total_deposits:.2f}\n"
-        #             f"• Profits earned: {total_profits:.2f}"
-        #         )
-        #         return WITHDRAW_AMOUNT
+        if total_profits < 50:
+            await update.message.reply_text(
+                "❌ Minimum profit of 50 USDT required before withdrawals.\n"
+                f"• Current Profits: {total_profits:.2f} USDT"
+            )
+            return ConversationHandler.END
 
-    # Record the withdrawal attempt
-                 
+        if amount > available_profits:
+            await update.message.reply_text(
+                f"❌ You can only withdraw profits until ROI is met.\n"
+                f"• Available to withdraw: {available_profits:.2f} USDT\n"
+                f"• Deposits: {total_deposits:.2f}\n"
+                f"• Profits: {total_profits:.2f}"
+            )
+            return WITHDRAW_AMOUNT
+
+        # --- Passed all checks, apply fee ---
         net_amount = round(amount * 0.90, 2)
         context.user_data['withdraw_amount'] = amount
         context.user_data['withdraw_net_amount'] = net_amount
 
-        if total_profits >=50 and current_balance > 0:
+        await update.message.reply_text(
+            f"✅ Withdrawal request accepted.\n"
+            f"You will receive {net_amount} USDT after a 10% fee.\n\n"
+            "Now, enter your USDT wallet address:"
+        )
+        return WITHDRAW_ADDRESS
 
-            await update.message.reply_text(
-                f"✅ Withdrawal request accepted.\n"
-                f"You will receive {net_amount} USDT after a 10% fee.\n\n"
-                "Now, enter your USDT wallet address:"
-            )
-            return WITHDRAW_ADDRESS
-        else:
-            await update.message.reply_text(
-                "❌ Minimum profit of 50 USDT required before withdrawals.\n"
-                f"• Current Profits: {total_profits:.2f} USDT\n"
-                "Please continue trading to earn profits."
-            )
-            return ConversationHandler.END  
-          
     except ValueError:
         await update.message.reply_text("❌ Please enter a valid number.")
         return WITHDRAW_AMOUNT
