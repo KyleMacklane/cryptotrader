@@ -1967,7 +1967,16 @@ async def view_pending_users(update: Update, context: ContextTypes.DEFAULT_TYPE)
     pending_users = account_manager.get_pending_users()
     
     if not pending_users:
-        await update.message.reply_text("📭 No pending user registrations")
+        try:
+            if update.message:
+                await update.message.reply_text(message, parse_mode=parse_mode)
+            elif update.callback_query:
+                await update.callback_query.answer()
+                await update.callback_query.message.reply_text(message, parse_mode=parse_mode)
+            else:
+                logger.warning("No message or callback_query found in update")
+        except Exception as e:
+            logger.error(f"Failed to send message: {e}")
         return
     
     message = "🕐 Pending User Registrations:\n\n"
@@ -2005,7 +2014,7 @@ async def view_pending_users(update: Update, context: ContextTypes.DEFAULT_TYPE)
         message,
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
-            
+
 async def show_wallets(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = (
         "🔷 *Available Wallets*\n\n"
