@@ -397,7 +397,10 @@ class AccountManager:
     def add_pending_user(self, telegram_id, username, first_name, last_name, referral_id=None):
         """Add user to pending approval list"""
         pending_file = "pending_users.csv"
-        fieldnames = ["telegram_id", "username", "first_name", "last_name", "referral_id", "timestamp", "status"]
+        fieldnames = [
+            "telegram_id", "username", "first_name", "last_name", 
+            "referral_id", "timestamp", "status", "action", "action_by", "action_date"
+        ]
         
         try:
             # Check if user already exists in pending or approved
@@ -419,47 +422,23 @@ class AccountManager:
                     "last_name": last_name or "",
                     "referral_id": referral_id or "",
                     "timestamp": datetime.now().isoformat(),
-                    "status": "pending"
+                    "status": "pending",
+                    "action": "",
+                    "action_by": "",
+                    "action_date": ""
                 })
             return "added"
         except Exception as e:
             logger.error(f"Error adding pending user: {e}")
             return "error"
 
-    def _is_user_pending(self, telegram_id):
-        """Check if user is in pending list"""
-        pending_file = "pending_users.csv"
-        try:
-            if not os.path.exists(pending_file):
-                return False
-                
-            with open(pending_file, "r") as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    if row["telegram_id"] == str(telegram_id) and row["status"] == "pending":
-                        return True
-            return False
-        except Exception as e:
-            logger.error(f"Error checking pending user: {e}")
-            return False
-
-    def get_pending_users(self):
-        """Get all pending users"""
-        pending_file = "pending_users.csv"
-        try:
-            if not os.path.exists(pending_file):
-                return []
-                
-            with open(pending_file, "r") as f:
-                reader = csv.DictReader(f)
-                return [row for row in reader if row["status"] == "pending"]
-        except Exception as e:
-            logger.error(f"Error getting pending users: {e}")
-            return []
-
     def approve_user(self, telegram_id, admin_id):
         """Approve a pending user and create their account"""
         pending_file = "pending_users.csv"
+        fieldnames = [
+            "telegram_id", "username", "first_name", "last_name", 
+            "referral_id", "timestamp", "status", "action", "action_by", "action_date"
+        ]
         
         try:
             # Find and update pending user
@@ -469,23 +448,30 @@ class AccountManager:
             if os.path.exists(pending_file):
                 with open(pending_file, "r") as f:
                     reader = csv.DictReader(f)
-                    pending_users = list(reader)
+                    # Ensure all rows have consistent fields
+                    pending_users = []
+                    for row in reader:
+                        # Fill missing fields with empty values
+                        for field in fieldnames:
+                            if field not in row:
+                                row[field] = ""
+                        pending_users.append(row)
                     
                 for user in pending_users:
                     if user["telegram_id"] == str(telegram_id) and user["status"] == "pending":
                         user["status"] = "approved"
-                        user["approved_by"] = str(admin_id)
-                        user["approved_at"] = datetime.now().isoformat()
+                        user["action"] = "approved"
+                        user["action_by"] = str(admin_id)
+                        user["action_date"] = datetime.now().isoformat()
                         user_data = user
                         break
             
             if user_data:
-                # Save updated pending list
+                # Save updated pending list with consistent fields
                 with open(pending_file, "w", newline="") as f:
-                    writer = csv.DictWriter(f, fieldnames=list(pending_users[0].keys()) if pending_users else [])
-                    if pending_users:
-                        writer.writeheader()
-                        writer.writerows(pending_users)
+                    writer = csv.DictWriter(f, fieldnames=fieldnames)
+                    writer.writeheader()
+                    writer.writerows(pending_users)
                 
                 # Create actual account with referral
                 success, referrer_telegram_id, is_new = self.add_user_if_not_exists(
@@ -507,10 +493,14 @@ class AccountManager:
         except Exception as e:
             logger.error(f"Error approving user: {e}")
             return False
-    
+
     def reject_user(self, telegram_id, admin_id):
         """Reject a pending user"""
         pending_file = "pending_users.csv"
+        fieldnames = [
+            "telegram_id", "username", "first_name", "last_name", 
+            "referral_id", "timestamp", "status", "action", "action_by", "action_date"
+        ]
         
         try:
             if not os.path.exists(pending_file):
@@ -519,17 +509,23 @@ class AccountManager:
             pending_users = []
             with open(pending_file, "r") as f:
                 reader = csv.DictReader(f)
-                pending_users = list(reader)
+                # Ensure all rows have consistent fields
+                for row in reader:
+                    for field in fieldnames:
+                        if field not in row:
+                            row[field] = ""
+                    pending_users.append(row)
                 
             for user in pending_users:
                 if user["telegram_id"] == str(telegram_id) and user["status"] == "pending":
                     user["status"] = "rejected"
-                    user["rejected_by"] = str(admin_id)
-                    user["rejected_at"] = datetime.now().isoformat()
+                    user["action"] = "rejected"
+                    user["action_by"] = str(admin_id)
+                    user["action_date"] = datetime.now().isoformat()
                     break
             
             with open(pending_file, "w", newline="") as f:
-                writer = csv.DictWriter(f, fieldnames=list(pending_users[0].keys()))
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
                 writer.writeheader()
                 writer.writerows(pending_users)
                 
@@ -538,7 +534,32 @@ class AccountManager:
             logger.error(f"Error rejecting user: {e}")
             return False
 
-
+    def get_pending_users(self):
+        """Get all pending users"""
+        pending_file = "pending_users.csv"
+        fieldnames = [
+            "telegram_id", "username", "first_name", "last_name", 
+            "referral_id", "timestamp", "status", "action", "action_by", "action_date"
+        ]
+        
+        try:
+            if not os.path.exists(pending_file):
+                return []
+                
+            pending_users = []
+            with open(pending_file, "r") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    # Ensure all fields are present
+                    for field in fieldnames:
+                        if field not in row:
+                            row[field] = ""
+                    if row["status"] == "pending":
+                        pending_users.append(row)
+            return pending_users
+        except Exception as e:
+            logger.error(f"Error getting pending users: {e}")
+            return []
 
     def calculate_user_balance(self, telegram_id):
         """Calculate balance using MQL-style formula"""

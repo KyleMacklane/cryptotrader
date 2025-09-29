@@ -1969,10 +1969,10 @@ async def view_pending_users(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not pending_users:
         try:
             if update.message:
-                await update.message.reply_text(message, parse_mode=parse_mode)
+                await update.message.reply_text(message)
             elif update.callback_query:
                 await update.callback_query.answer()
-                await update.callback_query.message.reply_text(message, parse_mode=parse_mode)
+                await update.callback_query.message.reply_text(message)
             else:
                 logger.warning("No message or callback_query found in update")
         except Exception as e:
