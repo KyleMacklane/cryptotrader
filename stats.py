@@ -1,175 +1,278 @@
-async def trading_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        csv_file = "trades_log.csv"
-        trades = pd.DataFrame()
+async def handle_referral_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    ref_id = None
 
+    # Extract referral ID from deep link (full match to what's stored in CSV)
+    if context.args and context.args[0].startswith('ref_'):
+        ref_id = context.args[0][4:].strip()  # remove "ref_" and spaces
 
-        if os.path.exists(csv_file) and os.path.getsize(csv_file) > 0:
-            try:
-                trades = pd.read_csv(csv_file)
-                print(f"📊 Loaded {len(trades)} trades from {csv_file}")
+    # Prevent self-referrals
+    if ref_id:
+        referrer_telegram_id = account_manager._get_telegram_id_from_referral_id(ref_id)
+        if referrer_telegram_id == str(user.id):
+            ref_id = None  # ignore if user tries their own link
 
-                # If we got an empty dataframe but file exists, fall back to MT4
-                if trades.empty:
-                    print("⚠️ CSV file is empty - falling back to MT4")
-                    raise ValueError("Empty CSV file")
-                
-                if len(trades.columns) > 0 and 'ticket' not in trades.columns:
-                    # Try to identify which column is which based on position
-                    column_mapping = {}
-                    if len(trades.columns) >= 1:
-                        column_mapping[trades.columns[0]] = 'ticket'
-                    if len(trades.columns) >= 2:
-                        column_mapping[trades.columns[1]] = 'symbol'
-                    if len(trades.columns) >= 3:
-                        column_mapping[trades.columns[2]] = 'position_type'
-                    if len(trades.columns) >= 4:
-                        column_mapping[trades.columns[3]] = 'openprice'
-                    if len(trades.columns) >= 5:
-                        column_mapping[trades.columns[4]] = 'closeprice'
-                    if len(trades.columns) >= 6:
-                        column_mapping[trades.columns[5]] = 'profit'
-                    if len(trades.columns) >= 7:
-                        column_mapping[trades.columns[6]] = 'opentime'
-                    if len(trades.columns) >= 8:
-                        column_mapping[trades.columns[7]] = 'closetime'
-
-                    if len(trades.columns) >= 9:
-                        column_mapping[trades.columns[8]] = 'comment'                            
-
-
-
-                    trades = trades.rename(columns=column_mapping)
-                    print(f"🔧 Renamed columns: {list(trades.columns)}")        
-                
-            except (pd.errors.EmptyDataError, ValueError) as e:
-                print(f"❌ Error reading CSV file: {e} - falling back to MT4")
-                # Fall back to MT4 if CSV reading fails
-                mt4 = EACommunicator_API()
-                mt4.Connect()
-                trades = mt4.Get_all_closed_positions()
-
-            except Exception as e:
-                print(f"❌ Unexpected error reading CSV: {e} - falling back to MT4")
-                mt4 = EACommunicator_API()
-                mt4.Connect()
-                trades = mt4.Get_all_closed_positions()    
-        else:        
-             # If CSV doesn't exist, get from MT4 and it will create the file
-            mt4 = EACommunicator_API()
-            mt4.Connect()
-            trades = mt4.Get_all_closed_positions()
-
-        if trades is None or trades.empty:
-            if update.message:
-                await update.message.reply_text("❌ No closed trades found.")
-            elif update.callback_query:
-                await update.callback_query.message.reply_text("❌ No closed trades found.")
-            return
+    # Check if user already exists
+    existing_account = account_manager.get_account_info(user.id)
+    if existing_account:
+        # Existing user - show welcome back message
+        welcome_msg = f"👋 Welcome back, {user.first_name}!\n\nGood to see you again! Access your account below:"
         
-         # Ensure we have the expected column structure
-        if len(trades.columns) == 0:
-            await update.message.reply_text("❌ No data columns found in trades.")
-            return
+        # If they came via referral link but already exist, still acknowledge the referrer
+        if ref_id and referrer_telegram_id and referrer_telegram_id != str(user.id):
+            welcome_msg += f"\n\n📨 Thank you for sharing your referral link!"
         
-        # If columns are unnamed, assign proper names based on position
-        if trades.columns[0] == 'Unnamed: 0' or trades.columns[0].startswith('0'):
-            # Create proper column names based on typical MT4 export order
-            expected_columns = [
-                'ticket', 'symbol', 'position_type', 'openprice', 'closeprice',
-                'profit', 'opentime', 'closetime', 'comment'
-            ]
+        await update.message.reply_text(welcome_msg, reply_markup=main_menu_keyboard())
+        return
+
+    # Check if user is pending approval
+    if account_manager._is_user_pending(user.id):
+        pending_msg = (
+            "⏳ Your registration is pending admin approval.\n\n"
+            "Please wait while we review your application. "
+            "You'll receive a notification once approved."
+        )
+        
+        # Include referral info if applicable
+        if ref_id:
+            pending_msg += f"\n\n📨 Referral code: {ref_id}"
             
-            # Only rename as many columns as we have
-            rename_dict = {}
-            for i, col in enumerate(trades.columns):
-                if i < len(expected_columns):
-                    rename_dict[col] = expected_columns[i]
+        await update.message.reply_text(
+            pending_msg,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄 Check Status", callback_data="check_approval_status")]
+            ])
+        )
+        return
 
-            trades = trades.rename(columns=rename_dict)
-            print(f"📝 Assigned column names: {list(trades.columns)}")        
+    # New user - add to pending and notify admin
+    result = account_manager.add_pending_user(
+        telegram_id=user.id,
+        username=user.username,
+        first_name=user.first_name,
+        last_name=user.last_name,
+        referral_id=ref_id
+    )
 
-        trades['closetime'] = pd.to_datetime(trades['closetime'], errors='coerce')
-        trades['profit'] = pd.to_numeric(trades['profit'], errors='coerce')
-
-        # Drop rows with invalid close times
-        trades = trades[trades['closetime'].notna()]
-
-        # Only include valid trading activity (exclude deposits, withdrawals, balance adjustments)
-        valid_trades = trades[
-            trades['symbol'].notna() & 
-            (trades['symbol'].str.strip() != "") & 
-            (trades['position_type'].isin(["buy", "sell"]))
-        ]
-
+    if result == "added":
+        # Build admin notification message with referral info
+        admin_message = (
+            "🆕 New User Registration\n\n"
+            f"👤 User: {user.full_name}\n"
+            f"📱 Username: @{user.username or 'N/A'}\n"
+            f"🆔 ID: {user.id}\n"
+            f"📅 Registered: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n"
+        )
         
+        if ref_id:
+            referrer_info = ""
+            referrer_telegram_id = account_manager._get_telegram_id_from_referral_id(ref_id)
+            if referrer_telegram_id:
+                referrer_account = account_manager.get_account_info(referrer_telegram_id)
+                if referrer_account:
+                    referrer_name = f"{referrer_account.get('first_name', '')} {referrer_account.get('last_name', '')}".strip()
+                    referrer_username = referrer_account.get('username', '')
+                    referrer_info = f"\n👥 Referred by: {referrer_name} (@{referrer_username or 'N/A'}) - ID: {referrer_telegram_id}"
+            
+            admin_message += f"🔗 Referral Code: {ref_id}{referrer_info}"
+        else:
+            admin_message += "🔗 Referral: None (Organic registration)"
 
-        now = datetime.now()
-        today = now.date()
-        start_of_week = (today - timedelta(days=today.weekday()))
-        start_of_month = today.replace(day=1) #This gives us the first day of the current month, regardless of what today's day is.
-        last_day_of_prev_month = start_of_month - timedelta(days=1)
-        last_month_start = last_day_of_prev_month.replace(day=1)  # First day of previous month
-        last_month_end = last_day_of_prev_month  # Last day of previous month        
+        # Notify admins
+        for admin_id in ADMIN_IDS:
+            try:
+                keyboard = InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton("✅ Approve", callback_data=f"approve_user_{user.id}"),
+                        InlineKeyboardButton("❌ Reject", callback_data=f"reject_user_{user.id}")
+                    ]
+                ])
+                
+                await context.bot.send_message(
+                    chat_id=admin_id,
+                    text=admin_message,
+                    reply_markup=keyboard
+                )
+            except Exception as e:
+                logger.error(f"Error notifying admin {admin_id}: {e}")
 
-        past_3_months = today - relativedelta(months=3)
-        past_6_months = today - relativedelta(months=6)
-        past_1_year = today - relativedelta(years=1)
-
-        def calculate_stats(df, label):
-            total_profit = df['profit'].sum()
-            successful = df[df['profit'] > 0].shape[0]
-            unsuccessful = df[df['profit'] <= 0].shape[0]
-            return f"*{label}*\n• Total Profit: `${total_profit:.2f}`\n• ✅ Successful Trades: {successful}\n• ❌ Unsuccessful Trades: {unsuccessful}\n"
-
-        daily_trades = valid_trades[valid_trades['closetime'].dt.date == today]
-        weekly_trades = valid_trades[valid_trades['closetime'].dt.date >= start_of_week]
-        monthly_trades = valid_trades[
-            (valid_trades['closetime'].dt.date >= start_of_month) &
-            (valid_trades['closetime'].dt.date <= today)
-        ]
-
-        last_month_trades = valid_trades[
-            (valid_trades['closetime'].dt.date >= last_month_start) &
-            (valid_trades['closetime'].dt.date <= last_month_end)
-        ]
-
-        print(f"🔍 Last month trades found: {len(last_month_trades)}")
-        if not last_month_trades.empty:
-            print(f"   Sample close times: {last_month_trades['closetime'].dt.date.iloc[:3].tolist()}")
+        # Send waiting message to user
+        user_message = (
+            "📝 Thank you for your interest!\n\n"
+            "Your registration has been submitted for admin approval. "
+            "This usually takes a few minutes to a few hours.\n\n"
+        )
         
-        last_3_months_trades = valid_trades[valid_trades['closetime'].dt.date >= past_3_months]
-        last_6_months_trades = valid_trades[valid_trades['closetime'].dt.date >= past_6_months]
-        last_year_trades = valid_trades[valid_trades['closetime'].dt.date >= past_1_year]
+        if ref_id:
+            user_message += "📨 Your referral code has been recorded and will be applied upon approval.\n\n"
+            
+        user_message += "You'll receive a notification once your account is approved."
 
-        msg = (
-            "📊 *Trading Statistics*\n\n"
-            + calculate_stats(daily_trades, "📅 *Today*")
-            + "\n"
-            + calculate_stats(weekly_trades, "🗓️ *This Week*")
-            + "\n"
-            + calculate_stats(monthly_trades, "📆 *This Month*")
-            # + "\n"
-            # + calculate_stats(last_month_trades, "📉 *Last Month*")
-            # + "\n"
-            # + calculate_stats(last_3_months_trades, "🪻 *Past 3 Months*") + "\n"
-            # + "\n"
-            # + calculate_stats(last_6_months_trades, "🌼 *Past 6 Months*") + "\n"
-            # + "\n"
-            # + calculate_stats(last_year_trades, "📈 *Past 1 Year*")
+        await update.message.reply_text(
+            user_message,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄 Check Approval Status", callback_data="check_approval_status")],
+                [InlineKeyboardButton("📞 Contact Support", url="https://t.me/Unclesbotsupport")]
+            ])
+        )
+        
+    elif result == "pending":
+        await update.message.reply_text(
+            "⏳ Your registration is already pending approval.\n\n"
+            "Please wait while we review your application.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄 Check Status", callback_data="check_approval_status")]
+            ])
+        )
+    else:
+        await update.message.reply_text(
+            "❌ An error occurred during registration.\n\n"
+            "Please try again or contact support if the issue persists.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📞 Contact Support", url="https://t.me/Unclesbotsupport")]
+            ])
         )
 
-        if update.message:
-            await update.message.reply_text(msg, parse_mode='Markdown')
-        elif update.callback_query:
-            await update.callback_query.answer()
-            await update.callback_query.message.reply_text(msg, parse_mode='Markdown') 
+async def handle_user_approval(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle admin approval/rejection of new users"""
+    query = update.callback_query
+    await query.answer()
+    
+    if query.from_user.id not in ADMIN_IDS:
+        await query.edit_message_text("❌ Admin privileges required")
+        return
 
+    try:
+        action, user_id = query.data.split('_')[0], int(query.data.split('_')[2])
+        
+        if action == "approve":
+            # Approve the user
+            if account_manager.approve_user(user_id, query.from_user.id):
+                # Notify user
+                try:
+                    await context.bot.send_message(
+                        chat_id=user_id,
+                        text=(
+                            "🎉 Your account has been approved!\n\n"
+                            "Welcome to Uncle Hard Scalping Bot! "
+                            "You can now access all features and start investing.\n\n"
+                            "Use the menu below to get started:"
+                        ),
+                        reply_markup=main_menu_keyboard()
+                    )
+                except Exception as e:
+                    logger.error(f"Error notifying approved user: {e}")
+
+                # Update admin message
+                await query.edit_message_text(
+                    f"✅ User {user_id} approved successfully!\n\n"
+                    "They have been notified and can now access the bot.",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("📊 View User", callback_data=f"view_user_{user_id}")]
+                    ])
+                )
+            else:
+                await query.edit_message_text("❌ Failed to approve user")
+                
+        elif action == "reject":
+            # Reject the user
+            if account_manager.reject_user(user_id, query.from_user.id):
+                # Notify user
+                try:
+                    await context.bot.send_message(
+                        chat_id=user_id,
+                        text=(
+                            "❌ Your registration has been declined.\n\n"
+                            "If you believe this is an error, please contact support."
+                        )
+                    )
+                except Exception as e:
+                    logger.error(f"Error notifying rejected user: {e}")
+
+                await query.edit_message_text(f"❌ User {user_id} has been rejected")
+            else:
+                await query.edit_message_text("❌ Failed to reject user")
+                
     except Exception as e:
-        logger.error(f"Failed to send trading stats: {e}")
-        error_msg = "⚠️ Failed to generate trading statistics."
-        if update.message:
-            await update.message.reply_text(error_msg)
-        elif update.callback_query:
-            await update.callback_query.message.reply_text(error_msg)
+        logger.error(f"Error handling user approval: {e}")
+        await query.edit_message_text("❌ Error processing request")
+
+async def check_approval_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Let users check their approval status"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    
+    # Check if approved
+    if account_manager.get_account_info(user_id):
+        await query.edit_message_text(
+            "✅ Your account is approved and active!\n\n"
+            "You can now access all features:",
+            reply_markup=main_menu_keyboard()
+        )
+        return
+    
+    # Check if pending
+    if account_manager._is_user_pending(user_id):
+        await query.answer("⏳ Your application is still under review", show_alert=True)
+        return
+    
+    # Not registered
+    await query.edit_message_text(
+        "❌ You haven't registered yet.\n\n"
+        "Please use the /start command to begin registration.",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🚀 Start Registration", callback_data="start_registration")]
+        ])
+    )    
+
+async def view_pending_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin command to view all pending users"""
+    if update.effective_user.id not in ADMIN_IDS:
+        return
+    
+    pending_users = account_manager.get_pending_users()
+    
+    if not pending_users:
+        await update.message.reply_text("📭 No pending user registrations")
+        return
+    
+    message = "🕐 Pending User Registrations:\n\n"
+    for user in pending_users:
+        # Get referrer info if available
+        referrer_info = ""
+        if user.get('referral_id'):
+            referrer_telegram_id = account_manager._get_telegram_id_from_referral_id(user['referral_id'])
+            if referrer_telegram_id:
+                referrer_account = account_manager.get_account_info(referrer_telegram_id)
+                if referrer_account:
+                    referrer_name = f"{referrer_account.get('first_name', '')} {referrer_account.get('last_name', '')}".strip()
+                    referrer_info = f"\n   👥 Referrer: {referrer_name} (ID: {referrer_telegram_id})"
+        
+        message += (
+            f"👤 {user['first_name']} {user['last_name']}\n"
+            f"📱 @{user['username'] or 'N/A'}\n"
+            f"🆔 {user['telegram_id']}\n"
+            f"📅 {user['timestamp'][:16]}\n"
+            f"🔗 Ref: {user['referral_id'] or 'None'}{referrer_info}\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        )
+    
+    # Add action buttons
+    keyboard = []
+    for user in pending_users[:5]:  # Show first 5 users with action buttons
+        keyboard.append([
+            InlineKeyboardButton(f"✅ Approve {user['telegram_id']}", callback_data=f"approve_user_{user['telegram_id']}"),
+            InlineKeyboardButton(f"❌ Reject {user['telegram_id']}", callback_data=f"reject_user_{user['telegram_id']}")
+        ])
+    
+    keyboard.append([InlineKeyboardButton("🔄 Refresh", callback_data="admin_view_pending")])
+    
+    await update.message.reply_text(
+        message,
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
 

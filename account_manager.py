@@ -393,7 +393,153 @@ class AccountManager:
             "referral_count": account.get("referrals", "0"),
             "referral_earnings": account.get("referral_earnings", "0.00")
         }
+
+    def add_pending_user(self, telegram_id, username, first_name, last_name, referral_id=None):
+        """Add user to pending approval list"""
+        pending_file = "pending_users.csv"
+        fieldnames = ["telegram_id", "username", "first_name", "last_name", "referral_id", "timestamp", "status"]
+        
+        try:
+            # Check if user already exists in pending or approved
+            if self.get_account_info(telegram_id):
+                return "exists"  # User already approved
+            
+            if self._is_user_pending(telegram_id):
+                return "pending"  # User already pending
+            
+            # Add to pending list
+            with open(pending_file, "a", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                if f.tell() == 0:
+                    writer.writeheader()
+                writer.writerow({
+                    "telegram_id": str(telegram_id),
+                    "username": username or "",
+                    "first_name": first_name or "",
+                    "last_name": last_name or "",
+                    "referral_id": referral_id or "",
+                    "timestamp": datetime.now().isoformat(),
+                    "status": "pending"
+                })
+            return "added"
+        except Exception as e:
+            logger.error(f"Error adding pending user: {e}")
+            return "error"
+
+    def _is_user_pending(self, telegram_id):
+        """Check if user is in pending list"""
+        pending_file = "pending_users.csv"
+        try:
+            if not os.path.exists(pending_file):
+                return False
+                
+            with open(pending_file, "r") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    if row["telegram_id"] == str(telegram_id) and row["status"] == "pending":
+                        return True
+            return False
+        except Exception as e:
+            logger.error(f"Error checking pending user: {e}")
+            return False
+
+    def get_pending_users(self):
+        """Get all pending users"""
+        pending_file = "pending_users.csv"
+        try:
+            if not os.path.exists(pending_file):
+                return []
+                
+            with open(pending_file, "r") as f:
+                reader = csv.DictReader(f)
+                return [row for row in reader if row["status"] == "pending"]
+        except Exception as e:
+            logger.error(f"Error getting pending users: {e}")
+            return []
+
+    def approve_user(self, telegram_id, admin_id):
+        """Approve a pending user and create their account"""
+        pending_file = "pending_users.csv"
+        
+        try:
+            # Find and update pending user
+            pending_users = []
+            user_data = None
+            
+            if os.path.exists(pending_file):
+                with open(pending_file, "r") as f:
+                    reader = csv.DictReader(f)
+                    pending_users = list(reader)
+                    
+                for user in pending_users:
+                    if user["telegram_id"] == str(telegram_id) and user["status"] == "pending":
+                        user["status"] = "approved"
+                        user["approved_by"] = str(admin_id)
+                        user["approved_at"] = datetime.now().isoformat()
+                        user_data = user
+                        break
+            
+            if user_data:
+                # Save updated pending list
+                with open(pending_file, "w", newline="") as f:
+                    writer = csv.DictWriter(f, fieldnames=list(pending_users[0].keys()) if pending_users else [])
+                    if pending_users:
+                        writer.writeheader()
+                        writer.writerows(pending_users)
+                
+                # Create actual account with referral
+                success, referrer_telegram_id, is_new = self.add_user_if_not_exists(
+                    telegram_id,
+                    "main",
+                    str(telegram_id),
+                    referral_id=user_data.get("referral_id")
+                )
+                
+                # Log the approval and referral
+                if success and referrer_telegram_id:
+                    logger.info(f"User {telegram_id} approved with referrer {referrer_telegram_id}")
+                elif success:
+                    logger.info(f"User {telegram_id} approved without referrer")
+                    
+                return success
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error approving user: {e}")
+            return False
     
+    def reject_user(self, telegram_id, admin_id):
+        """Reject a pending user"""
+        pending_file = "pending_users.csv"
+        
+        try:
+            if not os.path.exists(pending_file):
+                return False
+                
+            pending_users = []
+            with open(pending_file, "r") as f:
+                reader = csv.DictReader(f)
+                pending_users = list(reader)
+                
+            for user in pending_users:
+                if user["telegram_id"] == str(telegram_id) and user["status"] == "pending":
+                    user["status"] = "rejected"
+                    user["rejected_by"] = str(admin_id)
+                    user["rejected_at"] = datetime.now().isoformat()
+                    break
+            
+            with open(pending_file, "w", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=list(pending_users[0].keys()))
+                writer.writeheader()
+                writer.writerows(pending_users)
+                
+            return True
+        except Exception as e:
+            logger.error(f"Error rejecting user: {e}")
+            return False
+
+
+
     def calculate_user_balance(self, telegram_id):
         """Calculate balance using MQL-style formula"""
         account = self.get_account_info(telegram_id)
