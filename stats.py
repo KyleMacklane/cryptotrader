@@ -1,10 +1,16 @@
-    try:
-        if update.message:
-            await update.message.reply_text(message, parse_mode=parse_mode)
-        elif update.callback_query:
-            await update.callback_query.answer()
-            await update.callback_query.message.reply_text(message, parse_mode=parse_mode)
-        else:
-            logger.warning("No message or callback_query found in update")
-    except Exception as e:
-        logger.error(f"Failed to send message: {e}")
+    def _is_user_pending(self, telegram_id):
+        """Check if user is in pending list"""
+        pending_file = "pending_users.csv"
+        try:
+            if not os.path.exists(pending_file):
+                return False
+                
+            with open(pending_file, "r") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    if row["telegram_id"] == str(telegram_id) and row["status"] == "pending":
+                        return True
+            return False
+        except Exception as e:
+            logger.error(f"Error checking pending user: {e}")
+            return False
